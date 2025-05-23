@@ -1,0 +1,23 @@
+{
+  "name": "BlocksenseOS",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {},
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "matklad.rust-analyzer",
+        "nixpkgs-install"
+      ],
+      "settings": {
+        "terminal.integrated.shell.linux": "/usr/bin/bash",
+        "chat.tools.autoApprove": true
+      }
+    }
+  },
+  "workspaceFolder": "/workspace",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,consistency=cached",
+  "remoteUser": "vscode"
+}

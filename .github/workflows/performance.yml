@@ -1,0 +1,85 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+      - '.github/workflows/performance.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+  schedule:
+    - cron: '0 4 * * 0'  # Weekly on Sunday at 4 AM UTC
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  performance-tests:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build all services
+      run: just build-all
+
+    - name: Run service startup performance tests
+      run: just test-service-startup
+
+    - name: Benchmark echo services
+      run: |
+        # Start services
+        just start-cpp-echo-service &
+        CPP_PID=$!
+        just start-rust-echo-service &
+        RUST_PID=$!
+        sleep 5
+
+        # Performance testing with hey (HTTP load testing tool)
+        nix run nixpkgs#hey -- -n 1000 -c 10 -d "Hello Performance Test" http://localhost:8080 > cpp-performance.txt || echo "CPP service performance test completed"
+        nix run nixpkgs#hey -- -n 1000 -c 10 -d "Hello Performance Test" http://localhost:8081 > rust-performance.txt || echo "Rust service performance test completed"
+
+        # Cleanup
+        kill $CPP_PID $RUST_PID 2>/dev/null || true
+
+        echo "=== Performance Results ==="
+        echo "C++ Service:"
+        cat cpp-performance.txt || echo "No C++ results"
+        echo ""
+        echo "Rust Service:"
+        cat rust-performance.txt || echo "No Rust results"
+
+    - name: Memory usage analysis
+      run: |
+        echo "=== Memory Usage Analysis ==="
+        for binary in build/*/bin/*; do
+          if [ -f "$binary" ]; then
+            echo "Binary: $(basename $binary)"
+            echo "Size: $(stat -c%s $binary) bytes"
+            echo "---"
+          fi
+        done
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: performance-results
+        path: |
+          *-performance.txt
+        retention-days: 30

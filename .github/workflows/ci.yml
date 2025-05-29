@@ -1,4 +1,4 @@
-name: CI
+name: Main CI Pipeline
 
 on:
   push:
@@ -6,21 +6,217 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
 jobs:
-  nix-build:
+  # Stage 1: Code Quality & Security
+  code-quality:
+    name: Code Quality & Security
     runs-on: ubuntu-latest
+    outputs:
+      changes-detected: ${{ steps.changes.outputs.any }}
     steps:
     - uses: actions/checkout@v4
-    - uses: cachix/install-nix-action@v23
+      with:
+        fetch-depth: 0
+
+    - name: Detect changes
+      uses: dorny/paths-filter@v2
+      id: changes
+      with:
+        filters: |
+          nix:
+            - '**/*.nix'
+            - 'flake.lock'
+            - 'flake.nix'
+          rust:
+            - '**/Cargo.toml'
+            - '**/Cargo.lock'
+            - '**/*.rs'
+          cpp:
+            - '**/*.cpp'
+            - '**/*.h'
+            - '**/CMakeLists.txt'
+          docs:
+            - '**/*.md'
+            - 'docs/**'
+          ci:
+            - '.github/workflows/**'
+          any:
+            - '**'
+
+    - uses: cachix/install-nix-action@v26
       with:
         github_access_token: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build C++ Echo Service
-      run: nix build .#cpp-echo-service --print-build-logs
-    - name: Build Rust Echo Service  
-      run: nix build .#rust-echo-service --print-build-logs
-    - name: Build Attestation Agent
-      run: nix build .#attestation-agent --print-build-logs
-    - name: Build Derivation Hasher
-      run: nix build .#derivation-hasher --print-build-logs
-    - name: Check flake
-      run: nix flake check
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Run code quality checks
+      run: just ci-code-quality
+
+    - name: Secret scanning
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: main
+        head: HEAD
+        extra_args: --debug --only-verified
+
+  # Stage 2: Build Matrix
+  build-matrix:
+    name: Build Matrix
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: needs.code-quality.outputs.changes-detected == 'true'
+    strategy:
+      matrix:
+        component: [cpp-echo-service, rust-echo-service, attestation-agent, derivation-hasher]
+      fail-fast: false
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build ${{ matrix.component }}
+      run: |
+        case "${{ matrix.component }}" in
+          "cpp-echo-service") just build-cpp-echo-service ;;
+          "rust-echo-service") just build-rust-echo-service ;;
+          "attestation-agent") just build-attestation-agent ;;
+          "derivation-hasher") just build-derivation-hasher ;;
+        esac
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.component }}-binary
+        path: build/${{ matrix.component }}/
+        retention-days: 7
+
+  # Stage 3: Service Testing
+  service-integration-tests:
+    name: Service Integration Tests
+    runs-on: ubuntu-latest
+    needs: build-matrix
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@v4
+      with:
+        pattern: "*-binary"
+        merge-multiple: true
+        path: build/
+
+    - name: Run service integration tests
+      run: just ci-service-tests
+
+  # Stage 4: VM and System Tests
+  vm-system-tests:
+    name: VM and System Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Run VM and system tests
+      run: just ci-vm-tests
+
+  # Stage 5: Security & Attestation
+  security-attestation-tests:
+    name: Security & Attestation Tests
+    runs-on: ubuntu-latest
+    needs: [build-matrix, service-integration-tests]
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build attestation components
+      run: |
+        just build-attestation-agent
+        just build-rust-client
+
+    - name: Run security and attestation tests
+      run: just ci-security-tests
+
+  # Stage 6: Documentation & Reproducibility
+  documentation-reproducibility:
+    name: Documentation & Reproducibility
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Run documentation and reproducibility tests
+      run: just ci-docs-reproducibility
+
+  # Final Summary Job
+  ci-summary:
+    name: CI Summary
+    runs-on: ubuntu-latest
+    needs: [code-quality, build-matrix, service-integration-tests, vm-system-tests, security-attestation-tests, documentation-reproducibility]
+    if: always()
+    steps:
+    - name: CI Pipeline Summary
+      run: |
+        echo "=== BlocksenseOS CI Pipeline Summary ==="
+        echo ""
+        echo "📊 **Stage Results:**"
+        echo "- Code Quality & Security: ${{ needs.code-quality.result }}"
+        echo "- Build Matrix: ${{ needs.build-matrix.result }}"
+        echo "- Service Integration: ${{ needs.service-integration-tests.result }}"
+        echo "- VM & System Tests: ${{ needs.vm-system-tests.result }}"
+        echo "- Security & Attestation: ${{ needs.security-attestation-tests.result }}"
+        echo "- Documentation & Reproducibility: ${{ needs.documentation-reproducibility.result }}"
+        echo ""
+        
+        # Determine overall status
+        if [[ "${{ needs.code-quality.result }}" == "success" && 
+              "${{ needs.build-matrix.result }}" == "success" && 
+              "${{ needs.service-integration-tests.result }}" == "success" && 
+              "${{ needs.vm-system-tests.result }}" == "success" && 
+              "${{ needs.security-attestation-tests.result }}" == "success" && 
+              "${{ needs.documentation-reproducibility.result }}" == "success" ]]; then
+          echo "🎉 **Overall Status: SUCCESS** ✅"
+          echo "All CI stages completed successfully!"
+        else
+          echo "❌ **Overall Status: FAILURE**"
+          echo "One or more CI stages failed. Please review the logs above."
+          exit 1
+        fi

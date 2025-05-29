@@ -1,0 +1,81 @@
+name: TEE Attestation Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+      - '.github/workflows/tee-attestation.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  attestation-tests:
+    name: TEE Attestation Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build attestation components
+      run: |
+        just build-attestation-agent
+        just build-rust-client
+        just build-derivation-hasher
+
+    - name: Run attestation tests
+      run: just test-attestation
+
+    - name: Test derivation hashing
+      run: |
+        nix develop --command bash -c "
+          cd derivation-hasher
+          cargo test --verbose
+        "
+
+    - name: Integration test with services
+      run: |
+        # Start services in background for integration testing
+        just start-attestation-agent &
+        ATTESTATION_PID=$!
+        sleep 5
+
+        # Test client connection
+        if just test-client-cpp-service; then
+          echo "✅ Client-service integration successful"
+        else
+          echo "❌ Client-service integration failed"
+          exit 1
+        fi
+
+        # Cleanup
+        kill $ATTESTATION_PID 2>/dev/null || true
+
+    - name: Upload attestation test artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: attestation-test-results
+        path: |
+          attestation-agent/target/debug/
+          clients/rust-client/target/debug/
+          derivation-hasher/target/debug/
+        retention-days: 3

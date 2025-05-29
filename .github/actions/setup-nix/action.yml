@@ -1,0 +1,21 @@
+name: 'Setup Nix Environment'
+description: 'Install Nix and setup Cachix for BlocksenseOS'
+inputs:
+  github_token:
+    description: 'GitHub token for Nix installation'
+    required: true
+  cachix_auth_token:
+    description: 'Cachix authentication token'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ inputs.github_token }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense
+        authToken: ${{ inputs.cachix_auth_token }}

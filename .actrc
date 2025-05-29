@@ -1,0 +1,29 @@
+# Act configuration for running GitHub workflows locally
+# This file configures act to simulate the exact GitHub environment
+
+# Use Ubuntu 22.04 to match GitHub's ubuntu-latest
+# As of 25-06-2025, the latest version is still 22.04
+# See here https://github.com/catthehacker/docker_images for the latest tags
+-P ubuntu-latest=catthehacker/ubuntu:act-22.04
+-P ubuntu-22.04=catthehacker/ubuntu:act-22.04
+
+# Self-hosted runner simulation (use large image for Nix builds)
+-P self-hosted=catthehacker/ubuntu:full-22.04
+
+# Bind mount Docker socket for nested containers
+--container-daemon-socket /var/run/docker.sock
+
+# Use artifact server for uploads/downloads between jobs
+--artifact-server-path /tmp/act-artifacts
+
+# Default secrets file (will be overridden by environment-specific files)
+--secret-file .github/act-secrets.local.env
+
+# Default environment variables file
+--env-file .github/act-env.env
+
+# Enable verbose logging for debugging
+--verbose
+
+# Reuse containers to speed up multiple runs
+--reuse

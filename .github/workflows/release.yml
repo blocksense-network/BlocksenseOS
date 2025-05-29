@@ -1,0 +1,134 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., v1.0.0)'
+        required: true
+        type: string
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      release_id: ${{ steps.create_release.outputs.id }}
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          VERSION="${{ github.event.inputs.version }}"
+        else
+          VERSION="${{ github.ref_name }}"
+        fi
+        
+        echo "version=${VERSION}" >> $GITHUB_OUTPUT
+        
+        # Generate changelog between tags
+        PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+        if [ -n "$PREV_TAG" ]; then
+          echo "## Changes since ${PREV_TAG}" > changelog.md
+          git log --pretty=format:"- %s (%an)" ${PREV_TAG}..HEAD >> changelog.md
+        else
+          echo "## Initial Release" > changelog.md
+          echo "First release of BlocksenseOS" >> changelog.md
+        fi
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@0cb9c9b65d5d1901c1f53e5e66eaf4afd303e70e # v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ steps.changelog.outputs.version }}
+        release_name: BlocksenseOS ${{ steps.changelog.outputs.version }}
+        body_path: changelog.md
+        draft: false
+        prerelease: false
+
+  build-release-artifacts:
+    name: Build Release Artifacts
+    runs-on: ubuntu-latest
+    needs: create-release
+    strategy:
+      matrix:
+        target: [x86_64-linux, aarch64-linux]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Build release artifacts
+      run: just build-release-artifacts
+
+    - name: Package release artifacts
+      run: |
+        VERSION=$(echo ${{ github.ref_name }} | sed 's/^v//')
+        mkdir -p dist
+        
+        # Create release package
+        tar -czf "dist/blocksense-os-${VERSION}-${{ matrix.target }}.tar.gz" \
+          build/ \
+          README.md \
+          LICENSE \
+          docs/
+
+    - name: Upload Release Assets
+      uses: actions/upload-release-asset@e8f9f06c4b078e705bd2ea027f0926603fc9b4d5 # v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: dist/blocksense-os-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        asset_name: blocksense-os-${{ github.ref_name }}-${{ matrix.target }}.tar.gz
+        asset_content_type: application/gzip
+
+  publish-documentation:
+    name: Publish Documentation
+    runs-on: ubuntu-latest
+    needs: create-release
+    if: github.ref == 'refs/heads/main'
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Generate documentation
+      run: just generate-docs
+
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@4a2e02b36f31d8974a0d09d3bb9f3172aa2d0d0d # v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./docs/build

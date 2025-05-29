@@ -1,0 +1,121 @@
+# Cargo deny configuration for attestation-agent
+# This file configures security policies for dependencies
+
+[licenses]
+# List of explicitly allowed licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "CC0-1.0",
+    "0BSD",
+    "Unlicense",
+]
+
+# List of explicitly disallowed licenses
+deny = [
+    "GPL-2.0",
+    "GPL-3.0",
+    "AGPL-3.0",
+    "LGPL-2.0",
+    "LGPL-2.1",
+    "LGPL-3.0",
+    "SSPL-1.0",
+    "BUSL-1.1",
+]
+
+# Confidence threshold for detecting a license from a file
+confidence-threshold = 0.8
+
+# Allow 1 or more licenses on a single crate
+copyleft = "deny"
+
+[bans]
+# Lint level for when a crate version requirement is `*`
+wildcards = "deny"
+
+# The graph highlighting used when creating dotgraphs for crates
+highlight = "all"
+
+# List of crates that are allowed. Use with care!
+allow = [
+    # Allow specific crates that might have issues but are necessary
+]
+
+# List of crates to deny
+deny = [
+    # Deny insecure or problematic crates
+    { name = "openssl", version = "<0.10.55" }, # Known vulnerabilities in older versions
+    { name = "tokio", version = "<1.28.0" },    # Security fixes in newer versions
+    { name = "serde", version = "<1.0.136" },   # Memory safety fixes
+    { name = "serde_json", version = "<1.0.85" }, # DoS vulnerability fixes
+    
+    # Deny crates with known security issues
+    "yanked-crate",
+    "vulnerable-crate",
+]
+
+# Certain crates/versions that will be skipped when doing duplicate detection.
+skip = []
+
+# Similarly to `skip` allows you to skip certain crates from being checked for duplicates.
+skip-tree = []
+
+[advisories]
+# The path where the advisory database is cloned/fetched into
+db-path = "~/.cargo/advisory-db"
+
+# The url(s) of the advisory databases to use
+db-urls = ["https://github.com/rustsec/advisory-db"]
+
+# The lint level for security vulnerabilities
+vulnerability = "deny"
+
+# The lint level for unmaintained crates
+unmaintained = "warn"
+
+# The lint level for crates that have been yanked from their source registry
+yanked = "deny"
+
+# The lint level for crates with security notices
+notice = "warn"
+
+# A list of advisory IDs to ignore. Note that ignored advisories will still
+# output a note when they are encountered.
+ignore = [
+    # Add specific advisory IDs to ignore if needed
+    # "RUSTSEC-YYYY-NNNN",
+]
+
+[sources]
+# Lint level for what to happen when a crate from a crate registry that is
+# not in the allow list is encountered
+unknown-registry = "deny"
+
+# Lint level for what to happen when a crate from a git repository that is not
+# in the allow list is encountered
+unknown-git = "deny"
+
+# List of URLs for allowed crate registries. Defaults to the crates.io index
+# if not specified. If it is specified but empty, no registries are allowed.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# List of URLs for allowed Git repositories
+allow-git = [
+    # Add specific git repositories if needed
+    # "https://github.com/organization/repository",
+]
+
+[sources.allow-org]
+# List of organization GitHub usernames that are allowed
+github = [
+    # Add trusted organizations
+    "tokio-rs",
+    "serde-rs",
+    "rust-lang",
+    "hyperium",
+]

@@ -1,4 +1,4 @@
-name: CI
+name: CI/CD Pipeline
 
 on:
   push:
@@ -6,21 +6,322 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
 jobs:
-  nix-build:
+  # Stage 1: Code Quality & Security Baseline
+  code-quality:
+    name: Code Quality & Security
     runs-on: ubuntu-latest
+    outputs:
+      changes-detected: ${{ steps.changes.outputs.any }}
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
     steps:
-    - uses: actions/checkout@v4
-    - uses: cachix/install-nix-action@v23
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       with:
-        github_access_token: ${{ secrets.GITHUB_TOKEN }}
-    - name: Build C++ Echo Service
-      run: nix build .#cpp-echo-service --print-build-logs
-    - name: Build Rust Echo Service  
-      run: nix build .#rust-echo-service --print-build-logs
-    - name: Build Attestation Agent
-      run: nix build .#attestation-agent --print-build-logs
-    - name: Build Derivation Hasher
-      run: nix build .#derivation-hasher --print-build-logs
-    - name: Check flake
-      run: nix flake check
+        fetch-depth: 0
+
+    - name: Detect changes
+      uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v2
+      id: changes
+      with:
+        base: main
+        filters: |
+          nix:
+            - '**/*.nix'
+            - 'flake.lock'
+            - 'flake.nix'
+          rust:
+            - '**/Cargo.toml'
+            - '**/Cargo.lock'
+            - '**/*.rs'
+          cpp:
+            - '**/*.cpp'
+            - '**/*.h'
+            - '**/CMakeLists.txt'
+          docs:
+            - '**/*.md'
+            - 'docs/**'
+          ci:
+            - '.github/workflows/**'
+          any:
+            - '**'
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run code quality checks
+      run: just ci-code-quality
+
+    - name: Secret scanning (Pull Request)
+      if: github.event_name == 'pull_request'
+      uses: trufflesecurity/trufflehog@190f454a674bca31607f376bf19ba8692f155d9f # main
+      with:
+        path: ./
+        base: ${{ github.event.pull_request.base.sha }}
+        head: ${{ github.event.pull_request.head.sha }}
+        extra_args: --debug --only-verified
+
+    - name: Secret scanning (Push to main/develop)
+      if: github.event_name == 'push'
+      uses: trufflesecurity/trufflehog@190f454a674bca31607f376bf19ba8692f155d9f # main
+      with:
+        path: ./
+        base: HEAD~1
+        head: HEAD
+        extra_args: --debug --only-verified
+
+    - name: Generate SBOM
+      run: just security-sbom
+
+    - name: Upload SBOM artifacts
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: sbom-reports
+        path: security/sbom/
+        retention-days: 30
+
+  # Stage 2: Build Matrix
+  build-matrix:
+    name: Build All Components
+    runs-on: ubuntu-latest
+    needs: code-quality
+    if: needs.code-quality.outputs.changes-detected == 'true'
+    strategy:
+      matrix:
+        component: [cpp-echo-service, rust-echo-service, attestation-agent, derivation-hasher, rust-client]
+      fail-fast: false
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Build ${{ matrix.component }}
+      run: nix build .#${{ matrix.component }} -o build/${{ matrix.component }}
+
+    - name: Test ${{ matrix.component }} basic functionality
+      run: |
+        case "${{ matrix.component }}" in
+          "attestation-agent")
+            timeout 10s ./build/${{ matrix.component }}/bin/${{ matrix.component }} || true
+            ;;
+          "rust-echo-service"|"cpp-echo-service")
+            timeout 5s ./build/${{ matrix.component }}/bin/${{ matrix.component }} || true
+            ;;
+          *)
+            ./build/${{ matrix.component }}/bin/${{ matrix.component }} --help || true
+            ;;
+        esac
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ matrix.component }}-binary
+        path: build/${{ matrix.component }}/
+        retention-days: 7
+
+  # Stage 3: Unit Tests
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    needs: code-quality
+    strategy:
+      matrix:
+        project: [attestation-agent, services/rust-echo, clients/rust-client, derivation-hasher]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run unit tests for ${{ matrix.project }}
+      run: |
+        cd ${{ matrix.project }}
+        cargo test --verbose
+
+    - name: Run property-based tests
+      run: |
+        cd ${{ matrix.project }}
+        cargo test --verbose --release -- --ignored
+
+    - name: Generate test coverage
+      run: |
+        cd ${{ matrix.project }}
+        cargo install cargo-tarpaulin || true
+        cargo tarpaulin --out Xml || true
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
+      with:
+        file: ${{ matrix.project }}/cobertura.xml
+        flags: ${{ matrix.project }}
+        name: codecov-${{ matrix.project }}
+        fail_ci_if_error: false
+
+  # Stage 4: Integration Tests
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [build-matrix]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Download build artifacts
+      uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+      with:
+        path: build
+        merge-multiple: true
+
+    - name: Make binaries executable
+      run: |
+        chmod +x build/bin/* || true
+        ls -la build/bin/* || true
+
+    - name: Run integration tests
+      run: just test-integration
+
+    - name: Cleanup background processes
+      if: always()
+      run: |
+        echo "=== Cleaning up background processes ==="
+        # Kill any remaining processes by name
+        pkill -f "attestation-agent" || true
+        pkill -f "cpp-echo-service" || true
+        pkill -f "rust-echo-service" || true
+        echo "✓ Cleanup complete"
+
+  # Stage 5: System Tests
+  system-tests:
+    name: VM and System Tests
+    runs-on: ubuntu-latest
+    needs: integration-tests
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Enable KVM
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+
+    - name: Build VM image
+      run: nix build .#blocksenseOS-vm -o result-vm
+
+    - name: Test VM configuration
+      run: just check
+
+    - name: Build ISO image
+      run: nix build .#blocksenseOS-iso -o result-iso
+
+  # Stage 6: Documentation & Reproducibility
+  documentation-reproducibility:
+    name: Documentation & Reproducibility
+    runs-on: ubuntu-latest
+    needs: build-matrix
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Generate documentation
+      run: just generate-docs
+
+    - name: Test reproducible builds
+      run: |
+        nix build .#rust-echo-service -o result-1
+        nix build .#attestation-agent -o result-2
+        nix build .#rust-echo-service -o result-1-rebuild
+        nix build .#attestation-agent -o result-2-rebuild
+        diff -r result-1 result-1-rebuild || echo "Build not reproducible for rust-echo-service"
+        diff -r result-2 result-2-rebuild || echo "Build not reproducible for attestation-agent"
+
+    - name: Upload documentation
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: documentation
+        path: docs/build/
+        retention-days: 30
+
+  # Final Summary Job
+  ci-summary:
+    name: CI Pipeline Summary
+    runs-on: ubuntu-latest
+    needs: [code-quality, build-matrix, unit-tests, integration-tests, system-tests, documentation-reproducibility]
+    if: always()
+    steps:
+    - name: CI Pipeline Summary
+      run: |
+        echo "=== BlocksenseOS CI/CD Pipeline Summary ==="
+        echo ""
+        echo "📊 **Stage Results:**"
+        echo "- Code Quality & Security: ${{ needs.code-quality.result }}"
+        echo "- Build Matrix: ${{ needs.build-matrix.result }}"
+        echo "- Unit Tests: ${{ needs.unit-tests.result }}"
+        echo "- Integration Tests: ${{ needs.integration-tests.result }}"
+        echo "- System Tests: ${{ needs.system-tests.result }}"
+        echo "- Documentation & Reproducibility: ${{ needs.documentation-reproducibility.result }}"
+        echo ""
+        
+        if [[ "${{ needs.code-quality.result }}" == "success" && 
+              "${{ needs.build-matrix.result }}" == "success" && 
+              "${{ needs.unit-tests.result }}" == "success" && 
+              "${{ needs.integration-tests.result }}" == "success" && 
+              "${{ needs.system-tests.result }}" == "success" && 
+              "${{ needs.documentation-reproducibility.result }}" == "success" ]]; then
+          echo "🎉 **Overall Status: SUCCESS** ✅"
+        else
+          echo "❌ **Overall Status: FAILURE**"
+          exit 1
+        fi

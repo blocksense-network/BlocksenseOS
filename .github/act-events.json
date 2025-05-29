@@ -1,0 +1,38 @@
+[
+  {
+    "name": "push",
+    "on": "push",
+    "event": {
+      "ref": "refs/heads/main",
+      "repository": {
+        "default_branch": "main",
+        "name": "BlocksenseOS",
+        "full_name": "blocksense-network/BlocksenseOS"
+      }
+    }
+  },
+  {
+    "name": "pull_request",
+    "on": "pull_request",
+    "event": {
+      "action": "opened",
+      "number": 1,
+      "pull_request": {
+        "head": {
+          "ref": "feature-branch",
+          "sha": "abc123"
+        },
+        "base": {
+          "ref": "main"
+        }
+      }
+    }
+  },
+  {
+    "name": "workflow_dispatch",
+    "on": "workflow_dispatch",
+    "event": {
+      "inputs": {}
+    }
+  }
+]

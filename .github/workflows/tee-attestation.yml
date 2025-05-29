@@ -1,0 +1,147 @@
+name: TEE Attestation & Verification
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+      - '.github/workflows/tee-attestation.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  attestation-unit-tests:
+    name: Attestation Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [attestation-agent, derivation-hasher, clients/rust-client]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run attestation unit tests for ${{ matrix.component }}
+      run: |
+        cd ${{ matrix.component }}
+        cargo test --verbose -- --test-threads=1
+
+    - name: Run TEE-specific property tests
+      run: |
+        cd ${{ matrix.component }}
+        cargo test --verbose --release -- prop_test --test-threads=1
+
+  tee-compatibility-matrix:
+    name: TEE Compatibility Matrix
+    runs-on: ubuntu-latest
+    needs: attestation-unit-tests
+    strategy:
+      matrix:
+        tee_type: [sev-snp, tdx, sgx]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Test ${{ matrix.tee_type }} compatibility
+      run: just test-tee-compatibility
+
+  derivation-hashing-tests:
+    name: Derivation Hashing Tests
+    runs-on: ubuntu-latest
+    needs: attestation-unit-tests
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Test derivation hash consistency
+      run: just test-derivation-consistency
+
+  end-to-end-attestation:
+    name: End-to-End Attestation
+    runs-on: ubuntu-latest
+    needs: [tee-compatibility-matrix, derivation-hashing-tests]
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run end-to-end attestation tests
+      run: just test-attestation-e2e
+
+    - name: Run attestation security validation
+      run: just test-attestation-security
+
+  attestation-summary:
+    name: TEE Attestation Summary
+    runs-on: ubuntu-latest
+    needs: [attestation-unit-tests, tee-compatibility-matrix, derivation-hashing-tests, end-to-end-attestation]
+    if: always()
+    steps:
+    - name: Attestation Test Summary
+      run: |
+        echo "=== BlocksenseOS TEE Attestation Test Summary ==="
+        echo ""
+        echo "🔐 **Attestation Test Results:**"
+        echo "- Unit Tests: ${{ needs.attestation-unit-tests.result }}"
+        echo "- TEE Compatibility Matrix: ${{ needs.tee-compatibility-matrix.result }}"
+        echo "- Derivation Hashing: ${{ needs.derivation-hashing-tests.result }}"
+        echo "- End-to-End Attestation: ${{ needs.end-to-end-attestation.result }}"
+        echo ""
+        
+        if [[ "${{ needs.attestation-unit-tests.result }}" == "success" && 
+              "${{ needs.tee-compatibility-matrix.result }}" == "success" && 
+              "${{ needs.derivation-hashing-tests.result }}" == "success" && 
+              "${{ needs.end-to-end-attestation.result }}" == "success" ]]; then
+          echo "✅ **TEE Attestation Status: PASSED**"
+          echo "All TEE attestation tests completed successfully!"
+          echo "Supported TEE types: SEV-SNP, TDX, SGX"
+        else
+          echo "⚠️ **TEE Attestation Status: ATTENTION REQUIRED**"
+          echo "Some attestation tests require attention. Check the detailed results."
+        fi

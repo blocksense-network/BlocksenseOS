@@ -3,12 +3,20 @@
   "build": {
     "dockerfile": "Dockerfile"
   },
-  "features": {},
+  "features": {
+  },
   "customizations": {
     "vscode": {
       "extensions": [
-        "matklad.rust-analyzer",
-        "nix-community.vscode-nix"
+        "jnoortheen.nix-ide",
+        "bbenoist.Nix",
+        "rust-lang.rust-analyzer",
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.hexeditor",
+        "ms-vscode.vscode-json",
+        "redhat.vscode-yaml",
+        "ms-azuretools.vscode-docker"
       ],
       "settings": {
         "github.copilot.enable": {
@@ -19,6 +27,8 @@
           "ruby": true,
           "nix": true
         },
+        "chat.autoApprove": true,
+        "copilot.chat.autoApprove": true,
         "github.copilot.chat.codeGeneration.useCodebaseContext": true,
         "github.copilot.chat.experimental.codeActions": true,
         "github.copilot.chat.autoApprove": true,
@@ -42,6 +52,10 @@
   "remoteUser": "vscode",
   "postCreateCommand": "nix develop",
   "mounts": [
+    // Mount Docker socket to enable Docker commands from within container
+    // This connects to the host Docker daemon instead of running Docker-in-Docker
+    "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+
     // Mount host Nix store as read-only to share existing packages
     // This allows the container to access packages already built on the host
     "source=/nix/store,target=/nix/host-store,type=bind,readonly",

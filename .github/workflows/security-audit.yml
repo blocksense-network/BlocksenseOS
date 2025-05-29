@@ -1,0 +1,146 @@
+name: Security Audit & Compliance
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly on Monday at 2 AM UTC
+  push:
+    branches: [ main ]
+    paths:
+      - '**/Cargo.toml'
+      - '**/Cargo.lock'
+      - '**/deny.toml'
+      - 'flake.lock'
+      - 'scripts/security-audit.sh'
+      - '.github/workflows/security-audit.yml'
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  comprehensive-security-audit:
+    name: Comprehensive Security Audit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run comprehensive security audit
+      run: just security-audit
+
+    - name: Upload security audit results
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: security-audit-results
+        path: security/
+        retention-days: 90
+
+  vulnerability-scanning:
+    name: Vulnerability Scanning
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - name: Vulnerability scan with Trivy
+      uses: aquasecurity/trivy-action@76071ef0d7ec797419534a183b498b4d6366cf37 # master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security
+      uses: github/codeql-action/upload-sarif@1ba0c3f523160f7769a44c15bb3ff3f6eb60f88a # v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  supply-chain-security:
+    name: Supply Chain Security
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Generate comprehensive SBOM
+      run: just generate-sbom
+
+    - name: Upload SBOM
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: software-bill-of-materials
+        path: security/sbom/
+        retention-days: 365  # Keep SBOMs for compliance
+
+  ossf-scorecard:
+    name: OSSF Scorecard
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      id-token: write
+      actions: read
+      contents: read
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        persist-credentials: false
+
+    - name: Run OSSF Scorecard
+      uses: ossf/scorecard-action@dc50aa9510b46c811795eb24b2f1ba02a914e534 # v2.3.1
+      with:
+        results_file: ossf-scorecard-results.sarif
+        results_format: sarif
+        publish_results: true
+
+    - name: Upload OSSF Scorecard results
+      uses: github/codeql-action/upload-sarif@1ba0c3f523160f7769a44c15bb3ff3f6eb60f88a # v3
+      with:
+        sarif_file: ossf-scorecard-results.sarif
+
+  security-summary:
+    name: Security Summary Report
+    runs-on: ubuntu-latest
+    needs: [comprehensive-security-audit, vulnerability-scanning, supply-chain-security, ossf-scorecard]
+    if: always()
+    steps:
+    - name: Security Audit Summary
+      run: |
+        echo "=== BlocksenseOS Security Audit Summary ==="
+        echo ""
+        echo "🔒 **Security Check Results:**"
+        echo "- Comprehensive Security Audit: ${{ needs.comprehensive-security-audit.result }}"
+        echo "- Vulnerability Scanning: ${{ needs.vulnerability-scanning.result }}"
+        echo "- Supply Chain Security: ${{ needs.supply-chain-security.result }}"
+        echo "- OSSF Scorecard: ${{ needs.ossf-scorecard.result }}"
+        echo ""
+        
+        if [[ "${{ needs.comprehensive-security-audit.result }}" == "success" && 
+              "${{ needs.vulnerability-scanning.result }}" == "success" && 
+              "${{ needs.supply-chain-security.result }}" == "success" && 
+              "${{ needs.ossf-scorecard.result }}" == "success" ]]; then
+          echo "✅ **Security Status: PASSED**"
+          echo "All security checks completed successfully!"
+        else
+          echo "⚠️ **Security Status: ATTENTION REQUIRED**"
+          echo "One or more security checks require attention. Please review the detailed reports."
+        fi

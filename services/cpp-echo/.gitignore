@@ -1,0 +1,9 @@
+# Make sure to use out of source builds
+build/
+
+# Ignore CMake files in case they are accidentally created here
+CMakeFiles/
+CMakeCache.txt
+cpp-echo-service
+Makefile
+cmake_install.cmake

@@ -1,0 +1,123 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+      - '.github/workflows/performance.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+  schedule:
+    - cron: '0 4 * * 0'  # Weekly on Sunday at 4 AM UTC
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  service-performance:
+    name: Service Performance Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run service startup performance tests
+      run: just test-startup-performance
+
+  load-testing:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    needs: service-performance
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Run load testing
+      run: just test-load
+
+    - name: Run memory usage analysis
+      run: just test-memory-usage
+
+  benchmark-comparison:
+    name: Benchmark Comparison
+    runs-on: ubuntu-latest
+    needs: load-testing
+    if: github.event_name == 'pull_request'
+    defaults:
+      run:
+        shell: "${{ github.workspace }}/scripts/nix-env.sh {0}"
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: ./.github/actions/setup-nix
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+    - name: Build current version
+      run: just build-all
+
+    - name: Quick performance baseline
+      run: |
+        echo "=== Current Performance Baseline ==="
+        
+        # Quick startup time test
+        time timeout 3s ./build/attestation-agent/bin/attestation-agent &
+        ATTEST_PID=$!
+        sleep 1
+        kill $ATTEST_PID 2>/dev/null || true
+        
+        echo "Performance baseline recorded for PR comparison"
+
+  performance-summary:
+    name: Performance Summary
+    runs-on: ubuntu-latest
+    needs: [service-performance, load-testing, benchmark-comparison]
+    if: always()
+    steps:
+    - name: Performance Test Summary
+      run: |
+        echo "=== BlocksenseOS Performance Test Summary ==="
+        echo ""
+        echo "⚡ **Performance Test Results:**"
+        echo "- Service Performance: ${{ needs.service-performance.result }}"
+        echo "- Load Testing: ${{ needs.load-testing.result }}"
+        echo "- Benchmark Comparison: ${{ needs.benchmark-comparison.result }}"
+        echo ""
+        
+        if [[ "${{ needs.service-performance.result }}" == "success" && 
+              "${{ needs.load-testing.result }}" == "success" ]]; then
+          echo "✅ **Performance Status: PASSED**"
+          echo "All performance tests completed successfully!"
+        else
+          echo "⚠️ **Performance Status: ATTENTION REQUIRED**"
+          echo "Some performance tests require attention. Check the detailed results."
+        fi

@@ -2,10 +2,35 @@
 name = "attestation-agent"
 version = "0.1.0"
 edition = "2021"
+license = "MIT OR Apache-2.0"
 
 [dependencies]
+axum = "0.7"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-openssl = "0.10"
+uuid = { version = "1.0", features = ["v4"] }
+tower-http = { version = "0.5", features = ["cors", "limit", "timeout", "trace"] }
+tower = "0.4"  # Add tower dependency for ServiceExt
+log = "0.4"
+env_logger = "0.11"
+thiserror = "1.0"
+# Replace OpenSSL with RustCrypto for memory safety
+ring = "0.17"  # For cryptographic operations
+rand = "0.8"   # For secure random generation
 hex = "0.4"
+sha2 = "0.10"  # Add sha2 for system measurement calculation
+
+[features]
+default = ["mock-tee"]
+# TEE backend features - fail fast when hardware is not available
+sev-snp = []
+tdx = []
+sgx = []
+mock-tee = []
+all-tee = ["sev-snp", "tdx", "sgx"]
+
+[dev-dependencies]
+axum-test = "14"
+proptest = "1.0"
+tokio-test = "0.4"

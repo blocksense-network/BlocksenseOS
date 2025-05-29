@@ -1,0 +1,24 @@
+# Ensure reproducible builds by normalizing line endings
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+
+# Nix files should always use LF
+*.nix text eol=lf
+
+# Rust files
+*.rs text eol=lf
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+
+# C++ files
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.h text eol=lf
+CMakeLists.txt text eol=lf

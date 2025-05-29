@@ -1,4 +1,4 @@
-{ config, lib, pkgs, ... }:
+{ config, lib, pkgs, self, ... }:
 
 {
   # BlocksenseOS service definitions
@@ -7,10 +7,10 @@
     after = [ "network.target" ];
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      ExecStart = "${pkgs.cpp-echo-service}/bin/echo-service";
+      ExecStart = "${self.packages.${pkgs.system}.cpp-echo-service}/bin/cpp-echo-service";
       Restart = "always";
       User = "blocksense";
-      Group = "users";
+      Group = "blocksense";
     };
   };
   
@@ -19,10 +19,10 @@
     after = [ "network.target" ];
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      ExecStart = "${pkgs.rust-echo-service}/bin/rust-echo-service";
+      ExecStart = "${self.packages.${pkgs.system}.rust-echo-service}/bin/rust-echo-service";
       Restart = "always";
       User = "blocksense";
-      Group = "users";
+      Group = "blocksense";
     };
   };
   
@@ -31,10 +31,10 @@
     after = [ "network.target" ];
     wantedBy = [ "multi-user.target" ];
     serviceConfig = {
-      ExecStart = "${pkgs.attestation-agent}/bin/attestation-agent";
+      ExecStart = "${self.packages.${pkgs.system}.attestation-agent}/bin/attestation-agent";
       Restart = "always";
       User = "blocksense";
-      Group = "users";
+      Group = "blocksense";
     };
   };
 }

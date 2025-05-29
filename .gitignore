@@ -1,1 +1,46 @@
 .direnv/
+
+# Build outputs
+build/
+
+# Nix build outputs
+result*
+
+# Rust build outputs
+target/
+Cargo.lock
+
+# C++ build outputs
+*.o
+*.so
+*.a
+*.exe
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Cache directories
+.cache/
+__pycache__/
+*.pyc
+*.pyo

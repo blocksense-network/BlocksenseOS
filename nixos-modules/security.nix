@@ -14,12 +14,15 @@
   
   # Network security
   networking.firewall.enable = true;
-  networking.firewall.allowedTCPPorts = [ 22 ]; # SSH only
+  networking.firewall.allowedTCPPorts = [ 
+    22    # SSH
+    8080  # C++ Echo Service
+    8081  # Rust Echo Service
+  ];
   
   # Disable unnecessary services
   services.avahi.enable = false;
   services.printing.enable = false;
-  sound.enable = false;
   
   # Kernel hardening
   boot.kernel.sysctl = {

@@ -8,8 +8,23 @@
   boot.loader.systemd-boot.enable = true;
   boot.loader.efi.canTouchEfiVariables = true;
   
+  # File systems - basic configuration for VM/container environments
+  fileSystems."/" = {
+    device = "/dev/disk/by-label/nixos";
+    fsType = "ext4";
+  };
+  
+  fileSystems."/boot" = {
+    device = "/dev/disk/by-label/boot";
+    fsType = "vfat";
+  };
+  
   # Enable Nix flakes
   nix.settings.experimental-features = [ "nix-command" "flakes" ];
+  
+  # Network configuration for VM/container environments
+  networking.hostName = "blocksense-os";
+  networking.networkmanager.enable = true;
   
   # Basic packages
   environment.systemPackages = with pkgs; [
@@ -19,6 +34,8 @@
     wget
     tree
     htop
+    netcat-gnu  # For testing TCP services
+    tcpdump     # For network debugging
   ];
   
   # SSH configuration
@@ -28,10 +45,12 @@
     settings.PermitRootLogin = "no";
   };
   
-  # User configuration
+  # User configuration - ensure group exists
+  users.groups.blocksense = {};
   users.users.blocksense = {
     isNormalUser = true;
-    extraGroups = [ "wheel" ];
+    group = "blocksense";
+    extraGroups = [ "wheel" "networkmanager" ];
     openssh.authorizedKeys.keys = [
       # Add your SSH public key here
     ];

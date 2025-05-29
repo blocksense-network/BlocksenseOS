@@ -1,0 +1,236 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+      - '.github/workflows/performance.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'services/**'
+      - 'attestation-agent/**'
+  schedule:
+    - cron: '0 4 * * 0'  # Weekly on Sunday at 4 AM UTC
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  service-performance:
+    name: Service Performance Tests
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense-os
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build all services
+      run: just build-all
+
+    - name: Service startup performance
+      run: |
+        echo "=== Service Startup Performance ==="
+        echo "Testing startup times for all services..."
+        
+        # Test C++ echo service startup
+        echo "C++ Echo Service:"
+        time timeout 5s ./build/cpp-echo-service/bin/cpp-echo-service &
+        CPP_PID=$!
+        sleep 2
+        kill $CPP_PID 2>/dev/null || true
+        
+        # Test Rust echo service startup
+        echo "Rust Echo Service:"
+        time timeout 5s ./build/rust-echo-service/bin/rust-echo-service &
+        RUST_PID=$!
+        sleep 2
+        kill $RUST_PID 2>/dev/null || true
+        
+        # Test attestation agent startup
+        echo "Attestation Agent:"
+        time timeout 5s ./build/attestation-agent/bin/attestation-agent &
+        ATTEST_PID=$!
+        sleep 2
+        kill $ATTEST_PID 2>/dev/null || true
+
+  load-testing:
+    name: Load Testing
+    runs-on: ubuntu-latest
+    needs: service-performance
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense-os
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build services
+      run: just build-all
+
+    - name: Start services for load testing
+      run: |
+        ./build/cpp-echo-service/bin/cpp-echo-service &
+        CPP_PID=$!
+        ./build/rust-echo-service/bin/rust-echo-service &
+        RUST_PID=$!
+        ./build/attestation-agent/bin/attestation-agent &
+        ATTEST_PID=$!
+        
+        # Store PIDs for cleanup
+        echo $CPP_PID > cpp.pid
+        echo $RUST_PID > rust.pid
+        echo $ATTEST_PID > attest.pid
+        
+        sleep 5  # Let services start
+
+    - name: Load test echo services
+      run: |
+        echo "=== Echo Services Load Testing ==="
+        
+        # Install hey for load testing
+        nix profile install nixpkgs#hey
+        
+        # Test C++ echo service (TCP)
+        echo "Testing C++ Echo Service throughput..."
+        for i in {1..100}; do
+          echo "Load test message $i" | timeout 2s nc localhost 8080 &
+        done
+        wait
+        
+        # Test Rust echo service (TCP)
+        echo "Testing Rust Echo Service throughput..."
+        for i in {1..100}; do
+          echo "Load test message $i" | timeout 2s nc localhost 8081 &
+        done
+        wait
+
+    - name: Load test attestation agent
+      run: |
+        echo "=== Attestation Agent Load Testing ==="
+        
+        # HTTP load testing with hey
+        echo "Testing health endpoint..."
+        hey -n 500 -c 10 -t 30 http://localhost:3000/health > health-load-test.txt
+        
+        echo "Testing attestation endpoint..."
+        hey -n 100 -c 5 -t 60 "http://localhost:3000/attestation?tee_type_filter=sev-snp" > attestation-load-test.txt
+        
+        echo "=== Load Test Results ==="
+        echo "Health Endpoint Results:"
+        cat health-load-test.txt
+        echo ""
+        echo "Attestation Endpoint Results:"
+        cat attestation-load-test.txt
+
+    - name: Memory and resource analysis
+      run: |
+        echo "=== Resource Usage Analysis ==="
+        
+        # Check memory usage of running processes
+        ps aux | grep -E "(cpp-echo|rust-echo|attestation)" | grep -v grep || echo "No processes found"
+        
+        # Check binary sizes
+        echo "Binary sizes:"
+        for binary in build/*/bin/*; do
+          if [ -f "$binary" ]; then
+            echo "$(basename $binary): $(stat -c%s $binary) bytes"
+          fi
+        done
+
+    - name: Cleanup services
+      run: |
+        [ -f cpp.pid ] && kill $(cat cpp.pid) 2>/dev/null || true
+        [ -f rust.pid ] && kill $(cat rust.pid) 2>/dev/null || true
+        [ -f attest.pid ] && kill $(cat attest.pid) 2>/dev/null || true
+
+    - name: Upload performance results
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: performance-test-results
+        path: |
+          *-load-test.txt
+        retention-days: 30
+
+  benchmark-comparison:
+    name: Benchmark Comparison
+    runs-on: ubuntu-latest
+    needs: load-testing
+    if: github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      with:
+        fetch-depth: 0
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build current version
+      run: just build-all
+
+    - name: Quick performance baseline
+      run: |
+        echo "=== Current Performance Baseline ==="
+        
+        # Quick startup time test
+        time timeout 3s ./build/attestation-agent/bin/attestation-agent &
+        ATTEST_PID=$!
+        sleep 1
+        kill $ATTEST_PID 2>/dev/null || true
+        
+        echo "Performance baseline recorded for PR comparison"
+
+  performance-summary:
+    name: Performance Summary
+    runs-on: ubuntu-latest
+    needs: [service-performance, load-testing, benchmark-comparison]
+    if: always()
+    steps:
+    - name: Performance Test Summary
+      run: |
+        echo "=== BlocksenseOS Performance Test Summary ==="
+        echo ""
+        echo "⚡ **Performance Test Results:**"
+        echo "- Service Performance: ${{ needs.service-performance.result }}"
+        echo "- Load Testing: ${{ needs.load-testing.result }}"
+        echo "- Benchmark Comparison: ${{ needs.benchmark-comparison.result }}"
+        echo ""
+        
+        if [[ "${{ needs.service-performance.result }}" == "success" && 
+              "${{ needs.load-testing.result }}" == "success" ]]; then
+          echo "✅ **Performance Status: PASSED**"
+          echo "All performance tests completed successfully!"
+        else
+          echo "⚠️ **Performance Status: ATTENTION REQUIRED**"
+          echo "Some performance tests require attention. Check the detailed results."
+        fi

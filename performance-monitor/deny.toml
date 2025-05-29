@@ -1,0 +1,61 @@
+# Cargo deny configuration for performance-monitor
+# This file configures security policies for dependencies
+
+[graph]
+# Build for all target platforms to ensure cross-platform compatibility
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Security advisories configuration
+ignore = [
+    # Add specific advisory IDs to ignore if needed with justification
+]
+
+[licenses]
+# List of explicitly allowed licenses - only permissive licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",  # Required for ICU Unicode libraries
+    "CC0-1.0",      # Required for notify filesystem monitoring
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+[bans]
+# Deny multiple versions of the same crate
+multiple-versions = "warn"
+wildcards = "allow"
+
+# Allow multiple versions for commonly duplicated crates
+skip = [
+    { name = "windows-sys", version = "*" },
+    { name = "syn", version = "*" },
+]
+
+skip-tree = [
+    { name = "criterion", version = "*" },
+]
+
+[sources]
+# Only allow crates from crates.io
+unknown-registry = "warn"
+unknown-git = "warn"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

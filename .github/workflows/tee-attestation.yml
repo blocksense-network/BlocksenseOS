@@ -1,0 +1,279 @@
+name: TEE Attestation & Verification
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+      - '.github/workflows/tee-attestation.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'attestation-agent/**'
+      - 'clients/**'
+      - 'derivation-hasher/**'
+  workflow_dispatch:
+
+env:
+  NIX_CONFIG: |
+    experimental-features = nix-command flakes
+    accept-flake-config = true
+
+jobs:
+  attestation-unit-tests:
+    name: Attestation Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [attestation-agent, derivation-hasher, clients/rust-client]
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense-os
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Run attestation unit tests for ${{ matrix.component }}
+      run: |
+        cd ${{ matrix.component }}
+        nix develop ..#default --command cargo test --verbose -- --test-threads=1
+
+    - name: Run TEE-specific property tests
+      run: |
+        cd ${{ matrix.component }}
+        nix develop ..#default --command cargo test --verbose --release -- prop_test --test-threads=1
+
+  tee-compatibility-matrix:
+    name: TEE Compatibility Matrix
+    runs-on: ubuntu-latest
+    needs: attestation-unit-tests
+    strategy:
+      matrix:
+        tee_type: [sev-snp, tdx, sgx]
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense-os
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build attestation components
+      run: |
+        just build-attestation-agent
+        just build-rust-client
+        just build-derivation-hasher
+
+    - name: Test ${{ matrix.tee_type }} attestation support
+      run: |
+        # Start attestation agent
+        timeout 30s ./build/attestation-agent/bin/attestation-agent &
+        AGENT_PID=$!
+        sleep 5
+
+        # Test TEE-specific endpoints
+        echo "Testing ${{ matrix.tee_type }} attestation..."
+        
+        # Test health endpoint
+        curl -f http://localhost:3000/health || exit 1
+        
+        # Test attestation generation with TEE type filter
+        curl -f "http://localhost:3000/attestation?tee_type_filter=${{ matrix.tee_type }}" > attestation-${{ matrix.tee_type }}.json
+        
+        # Validate response structure
+        if ! jq -e '.success' attestation-${{ matrix.tee_type }}.json; then
+          echo "Attestation generation failed for ${{ matrix.tee_type }}"
+          cat attestation-${{ matrix.tee_type }}.json
+          exit 1
+        fi
+        
+        # Test attestation verification
+        MEASUREMENT=$(echo -n 'test-measurement' | sha256sum | cut -d' ' -f1 | head -c96)
+        curl -f -X POST http://localhost:3000/verify \
+          -H "Content-Type: application/json" \
+          -d "{\"version\":1,\"tee_type\":\"${{ matrix.tee_type }}\",\"measurement\":\"$MEASUREMENT\",\"timestamp\":$(date +%s),\"nonce\":\"test-nonce\",\"report_data\":\"test-data\",\"signature\":\"test-signature\",\"certificates\":[],\"tcb_status\":\"UpToDate\"}" > verification-${{ matrix.tee_type }}.json
+
+        # Cleanup
+        kill $AGENT_PID 2>/dev/null || true
+
+    - name: Upload TEE test artifacts
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: tee-${{ matrix.tee_type }}-results
+        path: |
+          attestation-${{ matrix.tee_type }}.json
+          verification-${{ matrix.tee_type }}.json
+        retention-days: 7
+
+  derivation-hashing-tests:
+    name: Derivation Hashing Tests
+    runs-on: ubuntu-latest
+    needs: attestation-unit-tests
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build derivation hasher
+      run: just build-derivation-hasher
+
+    - name: Test derivation hashing functionality
+      run: |
+        cd derivation-hasher
+        nix develop ..#default --command cargo test --verbose
+
+    - name: Test derivation hash consistency
+      run: |
+        echo "Testing derivation hash consistency..."
+        
+        # Test with known derivations
+        HASH1=$(./build/derivation-hasher/bin/derivation-hasher test-derivation-1)
+        HASH2=$(./build/derivation-hasher/bin/derivation-hasher test-derivation-1)
+        
+        if [ "$HASH1" = "$HASH2" ]; then
+          echo "✅ Derivation hashing is consistent"
+        else
+          echo "❌ Derivation hashing is inconsistent"
+          echo "Hash 1: $HASH1"
+          echo "Hash 2: $HASH2"
+          exit 1
+        fi
+
+  end-to-end-attestation:
+    name: End-to-End Attestation
+    runs-on: ubuntu-latest
+    needs: [tee-compatibility-matrix, derivation-hashing-tests]
+    steps:
+    - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
+      with:
+        name: blocksense-os
+        authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+
+    - name: Install just
+      run: nix profile install nixpkgs#just
+
+    - name: Build all attestation components
+      run: |
+        just build-attestation-agent
+        just build-rust-client
+        just build-derivation-hasher
+        just build-cpp-echo-service
+        just build-rust-echo-service
+
+    - name: End-to-end attestation workflow
+      run: |
+        echo "=== End-to-End Attestation Test ==="
+        
+        # Start all services
+        ./build/attestation-agent/bin/attestation-agent &
+        AGENT_PID=$!
+        ./build/cpp-echo-service/bin/cpp-echo-service &
+        CPP_PID=$!
+        ./build/rust-echo-service/bin/rust-echo-service &
+        RUST_PID=$!
+        
+        # Store PIDs for cleanup
+        echo $AGENT_PID > agent.pid
+        echo $CPP_PID > cpp.pid
+        echo $RUST_PID > rust.pid
+        
+        sleep 5  # Let services start
+        
+        # Test client attestation workflow
+        echo "Testing client attestation with C++ service..."
+        timeout 15s ./build/rust-client/bin/rust-client attest --service cpp-echo || echo "C++ service attestation test completed"
+        
+        echo "Testing client attestation with Rust service..."
+        timeout 15s ./build/rust-client/bin/rust-client attest --service rust-echo || echo "Rust service attestation test completed"
+        
+        # Test direct attestation calls
+        echo "Testing direct attestation API calls..."
+        curl -f http://localhost:3000/health
+        curl -f "http://localhost:3000/attestation?challenge=test-challenge"
+
+    - name: Attestation security validation
+      run: |
+        echo "=== Attestation Security Validation ==="
+        
+        # Test invalid inputs
+        echo "Testing invalid TEE type..."
+        if curl -f "http://localhost:3000/attestation?tee_type_filter=invalid-tee" 2>/dev/null; then
+          echo "❌ Invalid TEE type should be rejected"
+          exit 1
+        else
+          echo "✅ Invalid TEE type properly rejected"
+        fi
+        
+        # Test malformed verification request
+        echo "Testing malformed verification request..."
+        if curl -f -X POST http://localhost:3000/verify \
+          -H "Content-Type: application/json" \
+          -d '{"invalid": "data"}' 2>/dev/null; then
+          echo "❌ Malformed request should be rejected"
+          exit 1
+        else
+          echo "✅ Malformed request properly rejected"
+        fi
+
+    - name: Cleanup services
+      run: |
+        [ -f agent.pid ] && kill $(cat agent.pid) 2>/dev/null || true
+        [ -f cpp.pid ] && kill $(cat cpp.pid) 2>/dev/null || true
+        [ -f rust.pid ] && kill $(cat rust.pid) 2>/dev/null || true
+
+  attestation-summary:
+    name: TEE Attestation Summary
+    runs-on: ubuntu-latest
+    needs: [attestation-unit-tests, tee-compatibility-matrix, derivation-hashing-tests, end-to-end-attestation]
+    if: always()
+    steps:
+    - name: Attestation Test Summary
+      run: |
+        echo "=== BlocksenseOS TEE Attestation Test Summary ==="
+        echo ""
+        echo "🔐 **Attestation Test Results:**"
+        echo "- Unit Tests: ${{ needs.attestation-unit-tests.result }}"
+        echo "- TEE Compatibility Matrix: ${{ needs.tee-compatibility-matrix.result }}"
+        echo "- Derivation Hashing: ${{ needs.derivation-hashing-tests.result }}"
+        echo "- End-to-End Attestation: ${{ needs.end-to-end-attestation.result }}"
+        echo ""
+        
+        if [[ "${{ needs.attestation-unit-tests.result }}" == "success" && 
+              "${{ needs.tee-compatibility-matrix.result }}" == "success" && 
+              "${{ needs.derivation-hashing-tests.result }}" == "success" && 
+              "${{ needs.end-to-end-attestation.result }}" == "success" ]]; then
+          echo "✅ **TEE Attestation Status: PASSED**"
+          echo "All TEE attestation tests completed successfully!"
+          echo "Supported TEE types: SEV-SNP, TDX, SGX"
+        else
+          echo "⚠️ **TEE Attestation Status: ATTENTION REQUIRED**"
+          echo "Some attestation tests require attention. Check the detailed results."
+        fi

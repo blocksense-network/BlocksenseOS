@@ -21,166 +21,105 @@ See the [BlocksenseOS Design](./docs/BlocksenseOS-Design.md) document for detail
 
 ### Development Environment
 ```bash
-# Enter development shell
+# Enter development shell (includes all tools and dependencies)
 nix develop
-# or with just
+# OR using just
 just dev
-```
 
-## Build Commands
-
-### Using Just (Recommended)
-
-View all available commands:
-```bash
-just
-```
-
-#### Building Services
-```bash
 # Build all services
 just build-all
 
-# Build individual services
-just build-cpp          # C++ echo service
-just build-rust         # Rust echo service  
-just build-attestation  # Attestation agent
-just build-client       # Rust verification client
+# Start services (in separate terminals)
+just start-cpp-echo-service      # Port 8080
+just start-rust-echo-service     # Port 8081
+just start-attestation-agent     # Port 3000
+
+# Test the services
+just test-echo-cpp-service
+just test-echo-rust-service
 ```
 
-#### Building Images
+### Building Individual Components
 ```bash
-# Build VM image for testing
-just build-vm
+# Build specific services
+just build-cpp-echo-service
+just build-rust-echo-service
+just build-attestation-agent
+just build-rust-client
+just build-derivation-hasher
 
-# Build ISO image for deployment
-just build-iso
+# Build system images
+just build-vm                    # VM image for testing
+just build-iso                   # ISO image for deployment
 ```
 
-#### Testing
-```bash
-# Run all tests
-just test
+## Development Commands
 
-# Test builds only
-just test-build
+The project uses [Just](https://github.com/casey/just) as a command runner. Run `just` to see all available commands.
 
-# Test VM configuration
-just test-vm
+### Build Commands
+- `just build-all` - Build all core services
+- `just build-all-with-client` - Build all services including rust-client
+- `just build-cpp-echo-service` - Build C++ echo service
+- `just build-rust-echo-service` - Build Rust echo service
+- `just build-attestation-agent` - Build attestation agent
+- `just build-rust-client` - Build Rust client
+- `just build-derivation-hasher` - Build derivation hasher utility
+- `just build-vm` - Build VM image for testing
+- `just build-iso` - Build ISO image for deployment
 
-# Run integration tests
-just test-integration
-```
+### Service Commands
+- `just start-cpp-echo-service` - Start C++ echo service (port 8080)
+- `just start-rust-echo-service` - Start Rust echo service (port 8081)
+- `just start-attestation-agent` - Start attestation agent (port 3000)
 
-#### Running Services
-```bash
-# Start individual services (for development/testing)
-just start-cpp          # Start C++ echo service on port 8080
-just start-rust         # Start Rust echo service on port 8081
-just start-attestation  # Start attestation agent
-```
+### Testing Commands
+- `just test` - Run all tests
+- `just test-build` - Test build functionality only
+- `just test-vm` - Test VM configuration
+- `just test-integration` - Test integration scenarios
+- `just test-echo-cpp-service` - Test C++ echo service with netcat
+- `just test-echo-rust-service` - Test Rust echo service with netcat
+- `just test-client-cpp-service` - Test C++ service using Rust client
+- `just test-client-rust-service` - Test Rust service using Rust client
+- `just test-attestation` - Test attestation functionality
 
-#### Testing Services
-```bash
-# Test with netcat
-just test-echo-cpp      # Test C++ service
-just test-echo-rust     # Test Rust service
+### Code Quality Commands
+- `just lint` - Lint all code (Nix, Rust, C++)
+- `just lint-nix` - Lint only Nix files
+- `just lint-rust` - Lint only Rust code
+- `just lint-cpp` - Lint only C++ code
+- `just fmt` - Format all code
+- `just fmt-nix` - Format only Nix files
+- `just fmt-rust` - Format only Rust code
+- `just fmt-cpp` - Format only C++ code
 
-# Test with Rust client
-just test-client-cpp    # Test C++ service via client
-just test-client-rust   # Test Rust service via client
-```
+### Maintenance Commands
+- `just check` - Check flake configuration
+- `just update` - Update flake dependencies
+- `just clean` - Clean build artifacts
+- `just info` - Show system and project information
 
-#### Development
-```bash
-# Check flake configuration
-just check
+### VM Operations
+- `just run-vm` - Run VM for testing
 
-# Update dependencies
-just update
+## Manual Build (without Just)
 
-# Format Nix files
-just fmt
-
-# Clean build artifacts
-just clean
-
-# Show system information
-just info
-```
-
-#### VM Operations
-```bash
-# Run VM for testing
-just run-vm
-```
-
-### Using Nix Directly
-
-If you prefer using Nix commands directly:
+If you prefer not to use Just, you can build manually:
 
 ```bash
+# Enter development environment
+nix develop
+
 # Build services
-nix build .#cpp-echo-service
-nix build .#rust-echo-service
-nix build .#attestation-agent
-nix build .#rust-client
+nix build .#cpp-echo-service -o build/cpp-echo-service
+nix build .#rust-echo-service -o build/rust-echo-service
+nix build .#attestation-agent -o build/attestation-agent
 
-# Build VM
-nix build .#blocksenseOS-vm
-
-# Run tests
-./scripts/test.sh all
-```
-
-## Development Workflow
-
-1. **Setup Development Environment**:
-   ```bash
-   nix develop  # or: just dev
-   ```
-
-2. **Build and Test Services**:
-   ```bash
-   just build-all
-   just test
-   ```
-
-3. **Test Individual Services**:
-   ```bash
-   # Terminal 1: Start C++ service
-   just start-cpp
-   
-   # Terminal 2: Test the service
-   just test-echo-cpp
-   ```
-
-4. **Build and Test VM**:
-   ```bash
-   just build-vm
-   just test-vm
-   just run-vm
-   ```
-
-## Service Ports
-
-- **C++ Echo Service**: Port 8080
-- **Rust Echo Service**: Port 8081
-- **Attestation Agent**: Port 3000 (HTTP API)
-
-## Testing Services
-
-### Using netcat
-```bash
-echo "Hello World!" | nc localhost 8080  # C++ service
-echo "Hello World!" | nc localhost 8081  # Rust service
-```
-
-### Using the Rust Client
-```bash
-./result/bin/rust-client test-echo --service cpp-echo --message "Test message"
-./result/bin/rust-client test-echo --service rust-echo --message "Test message"
-./result/bin/rust-client attest --service cpp-echo
+# Run services
+./build/cpp-echo-service/bin/cpp-echo-service
+./build/rust-echo-service/bin/rust-echo-service
+./build/attestation-agent/bin/attestation-agent
 ```
 
 ## Security Features
@@ -191,6 +130,32 @@ echo "Hello World!" | nc localhost 8081  # Rust service
 - TPM2 support for hardware-based attestation
 - Blacklisted unnecessary kernel modules
 - User isolation with dedicated service accounts
+
+### Security Audit
+
+The project includes comprehensive security auditing:
+
+```bash
+# Run full security audit
+just security-audit
+
+# Run specific security checks
+just security-rust-audit       # Rust vulnerability scanning
+just security-sbom             # Generate Software Bill of Materials
+just security-vulnerability-scan # Comprehensive vulnerability scan
+just security-secret-scan      # Scan for hardcoded secrets
+```
+
+### Security Configuration
+
+For production deployments, enable branch protection on GitHub:
+1. Go to repository Settings → Branches
+2. Add branch protection rule for `main`
+3. Enable "Require pull request reviews before merging"
+4. Enable "Restrict pushes that create files larger than 100 MB"
+5. Enable "Require status checks to pass before merging"
+
+The security audit will identify additional hardening opportunities.
 
 ## Documentation
 

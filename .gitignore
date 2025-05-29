@@ -2,13 +2,13 @@
 
 # Build outputs
 build/
+security/
 
 # Nix build outputs
 result*
 
 # Rust build outputs
 target/
-Cargo.lock
 
 # C++ build outputs
 *.o
@@ -44,3 +44,15 @@ Thumbs.db
 __pycache__/
 *.pyc
 *.pyo
+
+# Generated security files (should not be committed)
+security/reports/
+security/rust-audit/
+security/sbom/
+security/scan-results/
+security/nix-validation/
+security/secret-scan/
+
+# Repomix generated files
+blocksense-*.md
+*prompt.md

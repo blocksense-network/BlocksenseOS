@@ -1,0 +1,86 @@
+# Cargo deny configuration for attestation-agent
+# This file configures security policies for dependencies
+
+[graph]
+# Build for all target platforms to ensure cross-platform compatibility
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+all-features = false
+no-default-features = false
+
+[output]
+feature-depth = 1
+
+[advisories]
+# Security advisories configuration
+ignore = [
+    # Add specific advisory IDs to ignore if needed with justification
+]
+
+[licenses]
+# List of explicitly allowed licenses - only permissive licenses
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-DFS-2016",
+    "Unicode-3.0",  # Used by unicode-ident crate, OSI approved
+    "CC0-1.0",
+    "0BSD",
+    "Unlicense",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = false
+
+[bans]
+# Security-focused banning configuration
+multiple-versions = "warn"
+wildcards = "deny"  # Don't allow wildcard version requirements
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Allow specific crates that might have multiple versions but are necessary
+allow = [
+    # Add specific crates with versions if needed
+]
+
+# Deny known problematic crates (use advisories for version-specific vulnerabilities)
+deny = [
+    # Deny crates with known security issues
+    { crate = "yanked-crate", reason = "Example yanked crate" },
+    { crate = "vulnerable-crate", reason = "Example vulnerable crate" },
+]
+
+skip = []
+skip-tree = []
+
+[sources]
+# Only allow trusted sources
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+
+[sources.allow-org]
+# Allow trusted GitHub organizations
+github = [
+    "tokio-rs",
+    "serde-rs", 
+    "rust-lang",
+    "hyperium",
+    "RustCrypto",
+    "rustsec",
+]
+gitlab = []
+bitbucket = []

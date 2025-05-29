@@ -21,6 +21,7 @@ class BlocksenseOSTest
     @project_root = File.dirname(@script_dir)
     @cpp_service_pid = nil
     @rust_service_pid = nil
+    @attestation_agent_pid = nil
     
     # Set up signal handlers for cleanup
     setup_signal_handlers
@@ -52,7 +53,7 @@ class BlocksenseOSTest
   def cleanup_services
     log_info "Cleaning up services..."
     
-    [@cpp_service_pid, @rust_service_pid].each do |pid|
+    [@cpp_service_pid, @rust_service_pid, @attestation_agent_pid].each do |pid|
       next unless pid && process_running?(pid)
       
       begin
@@ -292,6 +293,21 @@ class BlocksenseOSTest
       return false
     end
     log_info "Rust service started with PID: #{@rust_service_pid}"
+    
+    # Find Attestation Agent binary dynamically
+    attestation_binary = find_service_binary('attestation-agent')
+    unless attestation_binary
+      log_error "Attestation Agent binary not found in any result directory"
+      return false
+    end
+    
+    @attestation_agent_pid = start_service("Attestation Agent", attestation_binary, 3000)
+    unless @attestation_agent_pid
+      log_error "Failed to start Attestation Agent"
+      cleanup_services
+      return false
+    end
+    log_info "Attestation Agent started with PID: #{@attestation_agent_pid}"
     
     log_info "All test services started successfully"
     true

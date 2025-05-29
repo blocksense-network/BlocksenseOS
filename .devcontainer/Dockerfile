@@ -12,18 +12,38 @@ RUN apt-get update && apt-get install -y \
   npm \
   build-essential \
   pkg-config \
+  apt-transport-https \
+  gnupg \
+  lsb-release \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI only (not the full engine)
+# Add Docker's official GPG key
+RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+
+# Add Docker repository
+RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Install only Docker CLI (no daemon/engine)
+RUN apt-get update && apt-get install -y \
+  docker-ce-cli \
+  docker-buildx-plugin \
+  docker-compose-plugin \
   && rm -rf /var/lib/apt/lists/*
 
 # Install OpenAI Codex CLI globally
 # https://github.com/openai/codex
 RUN npm install -g @openai/codex
 
-# Create vscode user if it doesn't exist
+# Create vscode user if it doesn't exist and add to docker group
 RUN if ! id -u vscode > /dev/null 2>&1; then \
         groupadd --gid 1000 vscode && \
         useradd --uid 1000 --gid vscode --shell /bin/bash --create-home vscode && \
         echo 'vscode ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers; \
     fi
+
+# Add vscode user to docker group
+RUN usermod -aG docker vscode
 
 # Switch to vscode user
 USER vscode
@@ -54,8 +74,8 @@ COPY scripts/nix.conf /home/vscode/.config/nix/nix.conf
 # Set up development utility scripts with proper permissions
 RUN mkdir -p /home/vscode/.local/bin
 COPY --chmod=755 scripts/setup-nix-substituters.sh /home/vscode/.local/bin/setup-nix-substituters
-# COPY --chmod=755 scripts/sync-cargo-caches.sh /home/vscode/.local/bin/sync-cargo-caches
-# COPY --chmod=755 scripts/efficient-copy.sh /home/vscode/.local/bin/efficient-copy
+COPY --chmod=755 scripts/sync-cargo-caches.sh /home/vscode/.local/bin/sync-cargo-caches
+COPY --chmod=755 scripts/efficient-copy.sh /home/vscode/.local/bin/efficient-copy
 
 # Run Nix setup once during container creation (this is build-time appropriate)
 # Cargo cache seeding is intentionally NOT run here - it should be done per-session

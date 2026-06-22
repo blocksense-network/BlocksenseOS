@@ -34,7 +34,8 @@ jobs:
     - uses: ./.github/actions/setup-nix
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        substituters: ${{ vars.SUBSTITUTERS }}
+        trusted_public_keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
     - name: Run comprehensive security audit
       run: just security-audit
@@ -80,7 +81,8 @@ jobs:
     - uses: ./.github/actions/setup-nix
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        substituters: ${{ vars.SUBSTITUTERS }}
+        trusted_public_keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
     - name: Generate comprehensive SBOM
       run: just generate-sbom

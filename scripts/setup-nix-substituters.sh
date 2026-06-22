@@ -17,8 +17,8 @@ if [ -f ~/.config/nix/nix.conf ]; then
     else
         echo "⚠️  Adding missing substituters to existing config"
         echo "" >> ~/.config/nix/nix.conf
-        echo "substituters = https://cache.nixos.org/ https://nix-community.cachix.org" >> ~/.config/nix/nix.conf
-        echo "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs=" >> ~/.config/nix/nix.conf
+        echo "substituters = https://cache.nixos.org/ https://cache.metacraft-labs.com/blocksense-public" >> ~/.config/nix/nix.conf
+        echo "trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= blocksense-public:OOgTc0ye1FONCiVHMrbpScc/HP+lX3uoU0EfwzX6ypE=" >> ~/.config/nix/nix.conf
     fi
 else
     echo "❌ Nix configuration not found - should be copied during Docker build"

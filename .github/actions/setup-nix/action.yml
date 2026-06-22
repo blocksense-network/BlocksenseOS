@@ -1,21 +1,23 @@
 name: 'Setup Nix Environment'
-description: 'Install Nix and setup Cachix for BlocksenseOS'
+description: 'Install Nix and configure binary caches for BlocksenseOS'
 inputs:
   github_token:
     description: 'GitHub token for Nix installation'
     required: true
-  cachix_auth_token:
-    description: 'Cachix authentication token'
-    required: true
+  substituters:
+    description: 'Additional Nix substituters'
+    required: false
+    default: ''
+  trusted_public_keys:
+    description: 'Additional Nix trusted public keys'
+    required: false
+    default: ''
 runs:
   using: 'composite'
   steps:
-    - uses: cachix/install-nix-action@8887e596b4ee1134dae06b98d573bd674693f47c # v26
+    - name: Setup Nix
+      uses: metacraft-labs/nixos-modules/.github/setup-nix@main
       with:
-        github_access_token: ${{ inputs.github_token }}
-
-    - name: Setup Cachix
-      uses: cachix/cachix-action@18cf96c7c98e048e10a83abd92116114cd8504be # v14
-      with:
-        name: blocksense
-        authToken: ${{ inputs.cachix_auth_token }}
+        trusted-public-keys: ${{ inputs.trusted_public_keys }}
+        substituters: ${{ inputs.substituters }}
+        nix-github-token: ${{ inputs.github_token }}

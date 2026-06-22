@@ -25,7 +25,8 @@ jobs:
     - uses: ./.github/actions/setup-nix
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
-        cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        substituters: ${{ vars.SUBSTITUTERS }}
+        trusted_public_keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
     - name: Check current dependency status
       run: just check-dependency-freshness

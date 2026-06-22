@@ -45,47 +45,25 @@ get_github_token() {
     fi
 }
 
-# Function to get Cachix token
-get_cachix_token() {
-    print_status "$YELLOW" "Retrieving Cachix token from cachix CLI..."
+# Function to get Attic token
+get_attic_token() {
+    print_status "$YELLOW" "Retrieving Attic token from ATTIC_TOKEN..."
 
-    # Try different possible config locations
-    local config_paths=(
-        "$HOME/.config/cachix/cachix.dhall"
-        "$HOME/.cachix/cachix.dhall"
-    )
-
-    # Add XDG_CONFIG_HOME path only if the variable is set
-    if [[ -n "${XDG_CONFIG_HOME:-}" ]]; then
-        config_paths+=("$XDG_CONFIG_HOME/cachix/cachix.dhall")
+    if [[ -n "${ATTIC_TOKEN:-}" ]]; then
+        print_status "$GREEN" "✓ Attic token retrieved successfully"
+        echo "$ATTIC_TOKEN"  # Only the token goes to stdout
+        return 0
     fi
 
-    for config_path in "${config_paths[@]}"; do
-        if [[ -f "$config_path" ]]; then
-            print_status "$YELLOW" "Found Cachix config at: $config_path"
-
-            # Use dhall-to-json and jq to properly parse the Dhall config
-            local token
-            token=$(dhall-to-json <<< "($(<"$config_path")).authToken" 2>/dev/null | jq -r '.' 2>/dev/null)
-
-            if [[ -n "$token" && "$token" != "null" ]]; then
-                print_status "$GREEN" "✓ Cachix token retrieved successfully"
-                echo "$token"  # Only the token goes to stdout
-                return 0
-            fi
-        fi
-    done
-
-    print_status "$RED" "Error: Could not find Cachix authentication token"
-    print_status "$YELLOW" "Please run: cachix authtoken <your-token>"
-    print_status "$YELLOW" "Or login via: cachix use <your-cache-name>"
+    print_status "$RED" "Error: ATTIC_TOKEN is not set"
+    print_status "$YELLOW" "Export an Attic push token before running this script."
     return 1
 }
 
 # Function to create/update act secrets file
 create_act_secrets() {
     local github_token=$1
-    local cachix_token=$2
+    local attic_token=$2
     local secrets_file=".github/act-secrets.local.env"
 
     print_status "$YELLOW" "Creating/updating $secrets_file..."
@@ -98,8 +76,8 @@ create_act_secrets() {
 # REQUIRED FOR WORKFLOW EXECUTION (Auto-retrieved)
 # =============================================================================
 
-# Cachix authentication token for blocksense-os cache (from cachix CLI)
-CACHIX_AUTH_TOKEN=$cachix_token
+# Attic authentication token for blocksense-os cache
+ATTIC_TOKEN=$attic_token
 
 # GitHub personal access token (from gh CLI)
 GITHUB_TOKEN=$github_token
@@ -125,7 +103,7 @@ main() {
 
     cd "$(dirname "$0")/../.." # Go to repo root
 
-    local github_token cachix_token
+    local github_token attic_token
 
     # Get GitHub token
     if github_token=$(get_github_token); then
@@ -135,16 +113,16 @@ main() {
         exit 1
     fi
 
-    # Get Cachix token
-    if cachix_token=$(get_cachix_token); then
-        print_status "$GREEN" "Cachix token: ${cachix_token:0:8}..." # Show only first 8 chars
+    # Get Attic token
+    if attic_token=$(get_attic_token); then
+        print_status "$GREEN" "Attic token: ${attic_token:0:8}..." # Show only first 8 chars
     else
-        print_status "$RED" "Failed to get Cachix token"
+        print_status "$RED" "Failed to get Attic token"
         exit 1
     fi
 
     # Create secrets file
-    create_act_secrets "$github_token" "$cachix_token"
+    create_act_secrets "$github_token" "$attic_token"
 
     print_status "$GREEN" "=== Setup Complete ==="
     print_status "$YELLOW" "You can now run workflows locally with: act"

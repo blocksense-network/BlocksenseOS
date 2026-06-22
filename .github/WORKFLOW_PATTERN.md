@@ -13,7 +13,6 @@ steps:
 - uses: ./.github/actions/setup-nix
   with:
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
 ```
 
 ### 2. Set Default Shell for Jobs
@@ -48,8 +47,8 @@ Commands no longer need the `nix develop --command` prefix:
 ## Composite Action
 
 The shared setup action (`.github/actions/setup-nix/action.yml`) handles:
-- Nix installation via cachix/install-nix-action
-- Cachix configuration for caching
+- Nix installation via metacraft-labs/nixos-modules setup-nix action
+- Attic configuration for caching
 
 ## Environment Variables
 

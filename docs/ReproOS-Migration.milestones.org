@@ -1,0 +1,314 @@
+#+TITLE: BlocksenseOS → ReproOS Migration Milestones
+
+* Document
+  :PROPERTIES:
+  :status: draft 2026-07-08 — plan authored with the design re-founding
+           (BlocksenseOS-Design.md v0.2.0); campaign not started
+  :current_milestone: M0 (not started)
+  :related_specs: [[file:BlocksenseOS-Design.md][BlocksenseOS-Design.md]] (v0.2.0 — the target architecture),
+                  [[file:THREAT-MODEL.md][THREAT-MODEL.md]],
+                  ReproOS-Remote-Attestation.md + ReproOS-Remote-Attestation.milestones.org
+                  (in metacraft-labs/reprobuild-specs — the upstream platform
+                  campaign this migration consumes)
+  :executive_summary: Migrate BlocksenseOS from the v0.1.0 bespoke
+    NixOS-based prototype to its new shape: a downstream attested
+    configuration of ReproOS. The honest starting point (audited
+    2026-07-08): the prototype's echo services, HTTP agent scaffolding,
+    packaging, and CI harness are real; ALL TEE attestation generation and
+    verification paths are mocked or structural-only; the sparse-Merkle
+    proof logic is acknowledged-fake; the Noir/ZK client, LUKS/TPM
+    sealing, and reproducible-measurement baking are absent entirely.
+    Consequently this is not a port of working security machinery — it is
+    a re-founding in which the platform-level security work lands
+    upstream in ReproOS (where it is generalized for any downstream
+    product) and this repo keeps only the Blocksense-specific layer:
+    the configuration, service identity + signed responses, the ZK
+    verification client, and measurement governance.
+  :last_updated: 2026-07-08
+  :END:
+
+* Introduction
+
+** Component disposition (from the 2026-07-08 prototype audit)
+
+   | v0.1.0 component | Reality | Disposition |
+   |---|---|---|
+   | =attestation-agent/= (axum HTTP, 3 endpoints) | API scaffolding real; every TEE path returns hardcoded fake reports; verification is structural-only (no crypto; =ring= unused) | Retire in favor of the upstream ReproOS attestation-agent; the endpoint-shape experience feeds the upstream API design. No local TEE code survives. |
+   | =derivation-hasher/= | Leaf hashing real; SMT proofs acknowledged-fake (siblings picked by string match; verify checks a local map) | Retire for closure identity (verity-pinned launch measurement covers it upstream). SMT implementation experience reused for the service-identity registrar (M4). |
+   | =services/cpp-echo=, =services/rust-echo= | Real, working (ASIO coroutines / Tokio) | Keep as reference services; port packaging to reprobuild recipes (M1); extend with response signing (M4). |
+   | =clients/rust-client= | Echo path real; "attest" fetches a report and prints it, verifies nothing | Rebuild on the upstream =repro attest= library + Blocksense transcript rules (M3, M4). |
+   | Noir/ZK client | Does not exist (one comment mentions it) | Net-new build (M7); nothing to migrate. |
+   | =nixos-modules/= (base/security/services) | Real but plain ext4, no LUKS, TPM enabled-but-unused; agent port 3000 not even opened in the firewall | Superseded by the ReproOS configuration + attested image profile (M2). Hardening intent (sysctl, module blacklist, AppArmor) re-expressed as configuration content. |
+   | flake.nix / Justfile / CI / Ruby test harness | Real and load-bearing for dev flow | Kept during migration; retargeted milestone by milestone; NixOS build path decommissioned last (M8). |
+   | =performance-monitor/= | Real standalone crate, unintegrated | Out of migration scope; revisit after M8. |
+
+** Execution policy
+
+   - **Upstream-first.** Anything a different confidential-computing
+     product would also need (TEE backends, measurement tooling, image
+     profiles, verifier machinery, provisioning protocol) is
+     contributed to ReproOS / reprobuild, never re-implemented here.
+     From M0 onward this repo accepts no new platform-level TEE code.
+   - **Gate on upstream milestones explicitly.** Each milestone below
+     names the ReproOS-Remote-Attestation campaign milestones it
+     consumes. If upstream slips, this campaign waits rather than
+     forking.
+   - **No milestone is done without its verification gate green**, in
+     CI wherever hardware permits (mock + TPM tiers in plain CI; CVM
+     gates on real hosts, with recorded-evidence fixtures for CI).
+   - **No false security claims during the interim.** README/SECURITY
+     text must describe mocked capabilities as mocked until the gate
+     that makes them real is green (the v0.1.0 docs failed this test;
+     v0.2.0 docs fix it and this rule keeps it fixed).
+
+** Dependency graph
+
+   #+begin_example
+   M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M6 ── M7 ── M8
+                │     │           │
+   upstream:  RA.M0-1 RA.M2-3   RA.M5/M6 (+RA.M7 for provisioning)
+   #+end_example
+
+   (=RA.Mx= = milestone x of ReproOS-Remote-Attestation.milestones.org.)
+
+* Milestones
+
+** M0: Scope lock, upstream gates, prototype freeze
+   :PROPERTIES:
+   :status: planned
+   :upstream: none (coordination only)
+   :END:
+
+*** Problem
+    The prototype invites incremental "make the mock real" work in
+    the wrong repo. Lock the new division of responsibilities before
+    any code moves.
+
+*** Deliverables
+    - [ ] Decision record adopting the disposition table above
+      (reviewed by Blocksense + Metacraft platform maintainers)
+    - [ ] Contribution path agreed with the ReproOS team: which
+      prototype learnings (agent API shape, report JSON schema,
+      Justfile/CI patterns) feed upstream design, and who carries them
+    - [ ] Freeze notice in README + SECURITY.md: platform security
+      features are delivered by the upstream campaign; interim mock
+      status stated plainly
+    - [ ] CI: mark the =tee_type= matrix jobs as exercising mocks
+      (rename, so green ≠ "TEE works")
+
+*** Verification
+    - Decision record merged; README/SECURITY contain no claim that a
+      mocked capability is real (checked by doc review, recorded
+      here).
+
+** M1: Blocksense services as reprobuild recipes
+   :PROPERTIES:
+   :status: planned
+   :upstream: none (uses production reprobuild package model)
+   :END:
+
+*** Problem
+    The services build only via the Nix flake. The ReproOS
+    configuration (M2) needs them as native reprobuild recipes.
+
+*** Deliverables
+    - [ ] =repro.nim= recipes for cpp-echo, rust-echo, rust-client
+      (typed build actions; pinned toolchains; deterministic outputs)
+    - [ ] Recipe CI alongside the existing flake CI (parity phase)
+    - [ ] Reproducibility gate: build-twice byte-equality for each
+      service binary
+
+*** Verification
+    - t_services_repro_build: all three recipes build green in CI.
+    - t_services_deterministic: byte-identical across two builds.
+    - t_echo_parity: recipe-built binaries pass the existing echo
+      integration tests (same Ruby harness).
+
+** M2: The BlocksenseOS configuration + attested image (mock/TPM tiers)
+   :PROPERTIES:
+   :status: planned
+   :upstream: RA.M0 (attested image profile), RA.M1 (measurement
+              manifest), RA.M2 (agent + activity module)
+   :END:
+
+*** Problem
+    Replace the bespoke nixos-modules with a ReproOS system profile
+    that produces an attestable image.
+
+*** Deliverables
+    - [ ] =system.nim= + =modules/blocksense/services.nim= activity
+      (service units, users, firewall intent — including the port
+      exposure the v0.1.0 modules forgot for the agent)
+    - [ ] ReproOS =attestation= activity enabled; image built with the
+      =uefi-attested= layout; measurement manifest emitted
+    - [ ] Hardening intent from =nixos-modules/security.nix= (sysctl,
+      module blacklist, MAC policy) re-expressed as configuration
+      content and byte-verified in the generated files
+    - [ ] Boot smoke in CI: image boots, services respond, root is
+      read-only, state volumes writable
+
+*** Verification
+    - t_blocksense_image_boots: QEMU boot + echo round-trip on the
+      attested-layout image.
+    - t_blocksense_image_reproducible: image + manifest byte-equality
+      across two builds.
+    - t_config_hardening_present: generated config files contain the
+      migrated hardening settings.
+
+** M3: Verification via =repro attest=; retire the local agent
+   :PROPERTIES:
+   :status: planned
+   :upstream: RA.M2 (agent), RA.M3 (verifier + policies)
+   :END:
+
+*** Problem
+    The prototype's agent and client pretend to attest. Replace both
+    ends with the real upstream machinery at the mock/TPM tiers.
+
+*** Deliverables
+    - [ ] Upstream attestation-agent serves =/attestation= on
+      BlocksenseOS images; local =attestation-agent/= crate removed
+      from the build (kept in history only)
+    - [ ] Draft Blocksense measurement policy
+      (=reproos.attestation-policy.v1=) pinning the M2 manifests;
+      production policy is CVM-only with mock/TPM rehearsal variants
+    - [ ] rust-client rebuilt on the =repro attest= library: challenge
+      → verify → verdict, with the mock-refused-by-production-policy
+      behavior covered
+    - [ ] CI e2e at mock + TPM tiers: boot image → agent → client
+      verdict green; tampered-image fixture rejected
+
+*** Verification
+    - t_client_verify_e2e: full round-trip green at mock + TPM tiers.
+    - t_client_rejects_tamper: modified UKI/cmdline fixture rejected.
+    - t_no_local_tee_code: repo contains no TEE report
+      generation/verification code paths (lint rule / review gate).
+
+** M4: Service identity — in-enclave keys, signed responses, transcripts
+   :PROPERTIES:
+   :status: planned
+   :upstream: RA.M2 (report-data binding discipline)
+   :END:
+
+*** Problem
+    The Blocksense-specific layer: attributable responses without
+    per-request attestation, per BlocksenseOS-Design.md §4.
+
+*** Deliverables
+    - [ ] In-memory signing-key generation in the reference services
+      (secp256k1), response signing over the transcript hash
+    - [ ] Service-identity registrar: canonical identity record,
+      Merkle-ized (reusing the audited parts of the SMT experience;
+      proofs real this time), root bound via the standard report-data
+      binding
+    - [ ] =derivation-hasher/= retired from the build; migration note
+      recorded
+    - [ ] rust-client verifies: evidence → identity-root binding →
+      per-service Merkle proof → response signature (full offline
+      transcript check)
+
+*** Verification
+    - t_identity_binding: identity root recomputable from the record;
+      binding verifies against fresh evidence; stale/foreign roots
+      rejected.
+    - t_signed_response_transcript: end-to-end transcript verifies;
+      wrong key / tampered response / replayed counter all rejected.
+    - t_merkle_proofs_sound: proof verification fails for
+      non-members (property-tested — the v0.1.0 fake-proof failure
+      mode is the explicit regression target).
+
+** M5: Real hardware — CVM tier end-to-end + sealed state
+   :PROPERTIES:
+   :status: planned
+   :upstream: RA.M5 (SEV-SNP) and/or RA.M6 (TDX); RA.M7 for the
+              provisioning/remote-unseal path
+   :hardware: SEV-SNP and/or TDX host required for the live gates
+   :END:
+
+*** Deliverables
+    - [ ] BlocksenseOS image boots as a CVM on at least one of
+      SEV-SNP / TDX; live evidence verifies against the locally
+      computed manifest under the production policy
+    - [ ] Encrypted state volumes active (sealed or remote-unseal per
+      the upstream decision record); tamper gate demonstrated
+    - [ ] Recorded genuine evidence fixtures added to CI (accept +
+      tampered-reject sets)
+    - [ ] Operator quickstart: deploy image, verify instance, rotate
+      on policy update
+
+*** Verification
+    - t_cvm_live_e2e (hardware gate): challenge → evidence → verdict →
+      signed-response transcript, all green on real hardware.
+    - t_cvm_fixture_verify (CI gate): recorded evidence verifies;
+      tampered fixtures reject.
+    - t_state_sealed: modified boot chain leaves state volumes locked.
+
+** M6: Measurement governance + release pipeline
+   :PROPERTIES:
+   :status: planned
+   :upstream: RA.M8 (evidence-backed manifests) desirable, not blocking
+   :END:
+
+*** Deliverables
+    - [ ] Release pipeline publishing: tagged config source, image,
+      measurement manifest, signed policy update; build-graph evidence
+      attached when RA.M8 is available
+    - [ ] Approved-measurement set lifecycle documented (add on
+      release, drop on revocation/TCB events) with an owner and an
+      audit trail
+    - [ ] Verifier-facing distribution: client fetches policy updates
+      from the published, signed location; silent changes rejected
+
+*** Verification
+    - t_release_roundtrip: a staged release is verifiable by a clean
+      client checkout using only published artifacts.
+    - t_revocation_effective: dropping a manifest causes client + CI
+      verifiers to reject instances still running it.
+
+** M7: Noir ZK verification client (v1 committee stage) + on-chain verifier
+   :PROPERTIES:
+   :status: planned
+   :upstream: none beyond M5 outputs (committee stage verifies
+              evidence off-circuit per Design §5.3)
+   :END:
+
+*** Deliverables
+    - [ ] Watcher-committee tooling: K-of-N signing of verified
+      =(measurement, service_root, epoch)= facts using =repro attest=
+      verdicts
+    - [ ] Noir circuit: quorum-signature check + identity Merkle proof
+      + secp256k1 response-signature verification over committed
+      request/response
+    - [ ] Prover ("Alice") and verifier ("Bob") host tooling; contract
+      wrapper for on-chain verification; approved-set wiring to the
+      M6 governance surface
+    - [ ] Dependency audit log for every circuit library used
+
+*** Verification
+    - t_zk_e2e: transcript from a live/fixture instance → proof →
+      off-chain verify green; on-chain verify green on a testnet.
+    - t_zk_soundness_negatives: forged committee sigs, non-member
+      service keys, and tampered responses each fail to prove
+      (property/negative-tested).
+
+** M8: Decommission the NixOS prototype path
+   :PROPERTIES:
+   :status: planned
+   :upstream: none
+   :END:
+
+*** Deliverables
+    - [ ] Parity checklist: every load-bearing dev/CI flow has a
+      reprobuild-native equivalent (build, test, image, smoke)
+    - [ ] flake.nix reduced to a dev-shell convenience or removed;
+      nixos-modules/ removed; Justfile + CI retargeted fully
+    - [ ] Docs sweep: README, SECURITY.md, MAINTAINERS.md describe
+      only the ReproOS-based reality; v0.1.0 design kept as a
+      historical reference link
+    - [ ] performance-monitor disposition decided (integrate upstream,
+      keep standalone, or archive)
+
+*** Verification
+    - CI green with the NixOS path deleted; a fresh-clone bootstrap
+      following only the new README succeeds (walked by someone other
+      than the author, recorded here).

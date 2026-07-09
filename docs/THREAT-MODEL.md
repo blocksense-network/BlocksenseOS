@@ -1,100 +1,84 @@
-**This outline shows what your formal STRIDE document should contain, ordered as it would appear in a real template. It mirrors Microsoft SDL practice but is adapted to BlocksenseOS’ confidential‑computing stack (TDX, SEV‑SNP, Hopper GPUs), reproducible Nix builds and multi‑cloud deployment.**
+# BlocksenseOS Threat Model
 
----
+**Version:** 0.3-draft (re-scoped 2026-07-08 for the ReproOS re-founding)
+**Scope:** the Blocksense-specific layer described in
+[BlocksenseOS-Design.md](./BlocksenseOS-Design.md) v0.2.0.
 
-## 1 Executive summary
+## 1. Split of analysis
 
-BlocksenseOS protects three classes of assets—**code provenance, run‑time secrets and user workloads**—by pinning every bit that executes inside a hardware TEE and proving that fact to remote clients. The STRIDE analysis below enumerates the highest‑impact threats against that goal (spoofing of quotes, tampering with boot measurements, etc.), maps them to existing or planned mitigations (vTPM‑sealed LUKS keys, Merkle‑root binding in `REPORT_DATA`, supply‑chain auditing) and highlights residual gaps (e.g., side‑channel resistance to the October 2024 *TDXDown* attack). Where mitigations depend on hardware or cloud vendors, the document clearly marks the risk transfer.
+BlocksenseOS is a downstream attested configuration of ReproOS.
+Platform-level threats — boot/measurement-chain tampering, TEE
+hardware and vendor-key compromise, TCB rollback, sealed-storage
+attacks, attestation-agent hardening, verifier fail-open bugs,
+report replay/freshness, side channels — are analyzed in the
+platform threat model:
+[ReproOS-Remote-Attestation.md §11–12](https://github.com/metacraft-labs/reprobuild-specs/blob/latest/ReproOS-Remote-Attestation.md).
+Supply-chain threats (Trusting Trust, build-cache amplification) are
+analyzed in
+[ReproOS.md](https://github.com/metacraft-labs/reprobuild-specs/blob/latest/ReproOS.md).
 
----
+This document analyzes only what BlocksenseOS adds on top: service
+identity and signed responses, the ZK verification pipeline, the
+watcher committee, and measurement governance. Re-analyzing platform
+threats here would drift out of date; when a Blocksense feature
+changes a platform assumption, the platform model is updated
+upstream instead.
 
-## 2 Document metadata
+## 2. Assets (Blocksense layer)
 
-| Field     | Value                                                   |
-| --------- | ------------------------------------------------------- |
-| Version   | 0.2‑draft                                               |
-| Author    | *Fill in*                                               |
-| Reviewers | Security, Platform, DevOps                              |
-| Date      | 2025‑06‑13                                              |
-| Scope     | All BlocksenseOS components described in the Design Doc |
+- Per-service in-enclave signing keys and the service-identity
+  record/root.
+- Response transcripts (request/response commitments + signatures).
+- Watcher-committee keys and their signed verification facts.
+- The approved-measurement set (policy file + on-chain set) and its
+  governance path.
+- ZK circuits, proving/verifying keys, and the on-chain verifier
+  contract.
 
----
+## 3. Trust assumptions
 
-## 3 System overview
+- The ReproOS platform guarantees hold (verified launch measurement
+  ⇒ exact configuration; report-data binding discipline; fail-closed
+  verification). Attacks that require breaking those are platform
+  scope.
+- TEE vendor cryptography is sound at the attested TCB level.
+- For the v1 ZK stage: at most K−1 of N watchers are compromised.
+- Blocksense release governance (who may approve a measurement) is
+  performed by the parties named in the M6 governance record.
 
-### 3.1 Assets
+## 4. STRIDE analysis — Blocksense layer
 
-* **TEE identity & keys** (TDX chip endorsements, SEV VLEK/VCEK, Hopper CC certificates)
-* **Reproducible OS image** (`/run/current-system` hash)
-* **Sparse Merkle root** of audited derivations
-* **Application secrets & session keys** held in enclave memory / GPU private DRAM
-* **Attestation evidence & ZK proofs** delivered to clients
+| Category | Representative threats | Controls | Residual risk / actions |
+| --- | --- | --- | --- |
+| **S — Spoofing** | Fake service key presented as attested; foreign instance's identity root replayed against fresh evidence; watcher impersonation | Identity root bound into challenge-bound `report_data`; per-service Merkle proofs; watcher keys pinned + K-of-N | Watcher key custody procedures; rotate on personnel change |
+| **T — Tampering** | Response modified after signing; identity record mutated between attestation and use; approved-set edited outside governance | Signatures over `domain_tag ‖ request ‖ response ‖ counter`; root re-bound per attestation epoch; approved-set changes only via signed governance actions with audit trail | Counter/epoch semantics must be property-tested (replay-window edges) |
+| **R — Repudiation** | Operator denies an instance served a response; governance denies an approval | Offline-verifiable transcripts; signed, logged policy updates; on-chain approved-set history | Define transcript retention expectations for disputes |
+| **I — Information disclosure** | ZK proof leaks transcript details; identity record enumerates internal topology; provisioned secrets exposed by a compromised workload | Commitments/blinding in circuit inputs; identity record contains only public keys + package hashes; secrets tmpfs-only, session-scoped (platform §8) | A compromised *service* can still leak what it can read — application-level compartmentalization guidance needed |
+| **D — Denial of service** | Attestation-verification flooding of watchers; governance stall bricks releases; committee unavailability blocks v1 proofs | Watcher rate limits; N sized for liveness (K < N with margin); governance has a documented emergency-revocation and quorum-recovery path | Availability analysis for the committee is an M7 deliverable |
+| **E — Elevation of privilege** | Circuit soundness bug proves false statements on-chain; unaudited crypto library in the proof stack; verifier-contract upgrade path abused | Staged verification (committee v1 before in-circuit v2); per-dependency audit log; negative/property tests for every soundness claim; contract upgrade behind governance | Budget external audit of circuits before mainnet reliance |
 
-### 3.2 Trust boundaries & data flows
+## 5. Abuse cases worth explicit tests
 
-1. **Boot chain → TEE** (firmware, bootloader, kernel measured)
-2. **TEE → Attestation Agent** (local `TDREPORT` / `SNP_REPORT`)
-3. **Agent → Remote verifier** (HTTP+TLS; optional on‑chain verifier)
-4. **TEE ↔ GPU** (PCIe IDE or vendor‑specific CC DMA)
-5. **CI → Binary caches → Final image** (Nix Flake pinning)
+1. **Replayed identity root:** evidence fresh, root stale (from an
+   earlier boot session) — must fail (root is inside the
+   challenge-bound hash).
+2. **Cross-instance splice:** valid evidence from instance A + valid
+   identity proof from instance B — must fail.
+3. **Approved-set race:** response produced under a measurement
+   revoked mid-session — verifiers must reject at their policy
+   epoch; document the accepted staleness window.
+4. **Committee equivocation:** watchers sign conflicting facts for
+   the same epoch — must be detectable from the signed-fact log and
+   slashable/actionable under governance.
+5. **Mock leakage:** any mock/TPM-tier artifact accepted by a
+   production verifier — must be impossible by policy construction
+   (platform rule; asserted again here because the cost is
+   catastrophic on-chain).
 
----
+## 6. Review cadence
 
-## 4 Assumptions
-
-* The cloud hypervisor is **malicious but cannot break** TDX or SEV‑SNP cryptography.
-* Vendor micro‑code & firmware are kept patched (e.g., TDXDown fix v1.5.06).
-* Reproducible builds are bit‑for‑bit identical **when pinning is complete**; the team accepts that Nix alone “does not guarantee reproducibility” without extra hardening.
-* `REPORT_DATA` is limited to **64 bytes** on both TDX and SEV‑SNP; larger structures are hashed in advance.
-
----
-
-## 5 Threat analysis (STRIDE)
-
-| Category                       | Representative threats                                                                                                                    | Existing / Planned controls                                                                                                                                                             | Residual risk & actions                                                                  |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| **S — Spoofing**               | • Fake attestation server impersonates BlocksenseOS<br>• Malicious hypervisor forges TD quotes                                            | • Mutual‑TLS with device certs<br>• Verify Intel DCAP / AMD KDS chains in client library                                                                                                | Harden client against downgrade to legacy SEV (no SNP); add CT logging of PCCS/KDS certs |
-| **T — Tampering**              | • VMM rewrites guest memory before first measurement<br>• Supply‑chain edits Nix inputs<br>• Side‑channel “TDXDown” single‑step injection | • SNP/TDX measure **initial memory**; hash of `/run/current-system` + Merkle root folded into `REPORT_DATA`<br>• `cargo-deny` & Nix flake lock; SBOM in CI<br>• Patch TDX module 1.5.06 | Periodic runtime re‑measurement (RTMR0/1); monitor CVE feeds                             |
-| **R — Repudiation**            | • Operator denies altering GPU firmware<br>• Developer disputes malicious commit                                                          | • Immutable audit logs signed by build bot<br>• Include Hopper GPU attestation evidence via NVTrust                                                                                     | Integrate Sigstore cosign for artifact signing                                           |
-| **I — Information disclosure** | • VM‑exit timing / instruction‑count leak (TDXDown)<br>• SEV‑SNP micro‑code injection (CVE‑2024‑56161)<br>• Dump of LUKS key from RAM     | • Disable TSX, use constant‑time libs; update AMD AGESA firmware<br>• Full‑disk encryption with TPM‑sealed key released only if PCRs match secure boot chain                            | Conduct micro‑architectural side‑channel tests; adopt libgcrypt hardened curves          |
-| **D — Denial of Service**      | • VMM withholds vTPM, blocking unseal<br>• Exhaustive attestation requests flood Agent                                                    | • Boot abort on TPM unseal failure; cloud SLA fallback<br>• Axum rate‑limiter + circuit‑breaker in Agent                                                                                | Add async‑backoff; expose Prometheus metrics for early alert                             |
-| **E — Elevation of privilege** | • Bug in Attestation Agent’s OpenSSL FFI<br>• Unsandboxed C++ echo buffer overflow<br>• GPU driver privilege escalation                   | • Migrate crypto to RustCrypto (`ring`)<br>• Replace unsafe C++ echo with memory‑safe async Rust<br>• Use latest NVIDIA CC driver; verify firmware signature chain                      | Continuous fuzzing; compile Agent with `-Zsanitizer=address`                             |
-
----
-
-## 6 Mitigation matrix
-
-| Layer                   | Key mitigations                                                 |
-| ----------------------- | --------------------------------------------------------------- |
-| **Boot & Disk**         | Secure Boot + TPM‑sealed LUKS, measured PCRs                    |
-| **TEE**                 | Patch cadence; RTMR extends; vendor quote libraries             |
-| **GPU**                 | NVTrust attestation; PCIe IDE                                   |
-| **Build pipeline**      | Flake‑lock pinning; SBOM & `cargo‑deny`; reproducibility checks |
-| **Runtime services**    | Memory‑safe languages; seccomp‑bpf; AppArmor                    |
-| **Client verification** | Strict DCAP/KDS parsing; Merkle‑root proof; ZK‑proof linkage    |
-
----
-
-## 7 Open issues & future work
-
-1. **GPU attestation format** is still evolving—track NVIDIA spec updates.
-2. **Large custom claims**: research AMD “extended report” (4 KiB) path once firmware ships.
-3. **Formal proof of sparse‑Merkle integration**—adapt techniques from *Efficient Sparse Merkle Trees* paper.
-4. **Cross‑TEE interoperability**: ensure common verifier handles mixed TDX/SNP clusters.
-5. **Operational playbooks** for revoking compromised image hashes or Merkle leaves.
-
----
-
-## 8 Appendices
-
-* **A. Glossary** (TDX, RTMR, VCEK, `REPORT_DATA`…)
-* **B. Data‑flow diagrams** (link to Mermaid graph in design doc).
-* **C. Threat ranking worksheet** (DREAD or CVSS mapping).
-
----
-
-### How to use this outline
-
-Populate each cell with current implementation details, link to code or CI artifacts, and track status in the DevOps backlog. Re‑run the STRIDE review after every major roadmap milestone (0.2 MVP, 0.3 TDX support, 0.4 GPU+ZK).
-
-This structure gives auditors—and future contributors—a single, living place to check that every new feature (e.g., Noir proofs) has been evaluated against the canonical threat list.
+Re-run this analysis at every migration milestone that changes the
+security surface (M3, M4, M5, M7 of
+[ReproOS-Migration.milestones.org](./ReproOS-Migration.milestones.org)),
+and whenever the upstream platform model records a change that
+alters an assumption in §3.

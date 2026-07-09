@@ -1,17 +1,36 @@
 # BlocksenseOS
 
-A Linux distribution based on NixOS designed for remote TEE (Trusted Execution Environment) environments. BlocksenseOS provides confidential computing capabilities with built-in attestation services and secure workload execution.
+BlocksenseOS is the Blocksense network's **attested configuration of
+[ReproOS](https://github.com/metacraft-labs/reprobuild-specs/blob/latest/ReproOS-Remote-Attestation.md)** —
+a curated system profile that runs Blocksense workloads inside hardware TEEs
+(AMD SEV-SNP, Intel TDX) so that anyone can remotely verify, via hardware
+attestation of a reproducibly built image, exactly which software stack a
+node is running, and so that service responses can be proven authentic —
+including on-chain via zero-knowledge proofs.
+
+The reusable platform machinery (attestable image profile, TEE backends,
+measurement tooling, verifier, secret provisioning, sealed storage) is
+developed upstream in ReproOS. This repository contains the
+Blocksense-specific layer: the configuration itself, service identity and
+signed responses, the ZK verification client, and measurement governance.
+
+> **Status:** this repository currently contains the v0.1.0 NixOS-based
+> prototype, which is being migrated onto the ReproOS foundation. In the
+> prototype, all TEE attestation paths are **mocked** — do not deploy it
+> with security expectations. See the
+> [migration plan](./docs/ReproOS-Migration.milestones.org) for the
+> component-by-component disposition and gates.
 
 ## Architecture
 
-BlocksenseOS includes:
+Current prototype components:
 - **C++ Echo Service**: TCP echo server demonstrating native service integration
-- **Rust Echo Service**: Async TCP echo server showcasing Rust workloads  
-- **Attestation Agent**: TEE attestation verification service
-- **Rust Client**: Verification client for testing services and attestations
-- **NixOS Modules**: Security-hardened system configuration
+- **Rust Echo Service**: Async TCP echo server showcasing Rust workloads
+- **Attestation Agent**: HTTP attestation service (prototype; mock TEE backends — to be replaced by the upstream ReproOS agent)
+- **Rust Client**: client for testing services (attestation verification not yet implemented)
+- **NixOS Modules**: system configuration (to be replaced by the ReproOS `system.nim` profile)
 
-See the [BlocksenseOS Design](./docs/BlocksenseOS-Design.md) document for detailed architecture information.
+See the [BlocksenseOS Design](./docs/BlocksenseOS-Design.md) document (v0.2.0) for the target architecture and the division of responsibilities between ReproOS and this repository.
 
 ## Quick Start
 
@@ -124,12 +143,20 @@ nix build .#attestation-agent -o build/attestation-agent
 
 ## Security Features
 
+Prototype hardening that is actually in effect today:
+
 - AppArmor and audit logging enabled
 - Firewall configured for minimal attack surface
 - Kernel hardening with sysctl parameters
-- TPM2 support for hardware-based attestation
 - Blacklisted unnecessary kernel modules
 - User isolation with dedicated service accounts
+
+**Not yet real** (mocked or absent in the prototype; delivered by the
+ReproOS migration): TEE attestation report generation and verification,
+reproducible-image measurement, TPM-sealed disk encryption (the root
+filesystem is currently plain ext4), and the ZK verification client.
+See [THREAT-MODEL.md](./docs/THREAT-MODEL.md) and the
+[migration plan](./docs/ReproOS-Migration.milestones.org).
 
 ### Security Audit
 
@@ -159,8 +186,10 @@ The security audit will identify additional hardening opportunities.
 
 ## Documentation
 
-- [Design Document](./docs/BlocksenseOS-Design.md) - Architecture and design decisions
-- [Development Plan](./docs/BlocksenseOS-DevelopmentPlan.md) - Implementation roadmap
+- [Design Document](./docs/BlocksenseOS-Design.md) - Target architecture on the ReproOS foundation (v0.2.0)
+- [Threat Model](./docs/THREAT-MODEL.md) - Blocksense-layer threat analysis
+- [ReproOS Migration Plan](./docs/ReproOS-Migration.milestones.org) - The active implementation roadmap
+- [ReproOS Remote Attestation](https://github.com/metacraft-labs/reprobuild-specs/blob/latest/ReproOS-Remote-Attestation.md) - The upstream platform design this configuration builds on
 
 ## License
 

@@ -286,12 +286,40 @@ jobs:
 
     - name: Test reproducible builds
       run: |
+        set -euo pipefail
+
         nix build .#rust-echo-service -o result-1
         nix build .#attestation-agent -o result-2
-        nix build .#rust-echo-service -o result-1-rebuild
-        nix build .#attestation-agent -o result-2-rebuild
-        diff -r result-1 result-1-rebuild || echo "Build not reproducible for rust-echo-service"
-        diff -r result-2 result-2-rebuild || echo "Build not reproducible for attestation-agent"
+
+        # `--rebuild` re-executes the derivation and makes Nix compare the fresh
+        # output against the one already in the store. Without it the second
+        # `nix build` is a no-op that resolves to the *same* store path, so the
+        # comparison below would trivially succeed no matter what.
+        nix build .#rust-echo-service --rebuild -o result-1-rebuild
+        nix build .#attestation-agent --rebuild -o result-2-rebuild
+
+        # A differing pair prints the full diff (diagnostics) and makes the step
+        # exit non-zero. This gate must never report success on a real diff.
+        pairs=(
+          "rust-echo-service|result-1|result-1-rebuild"
+          "attestation-agent|result-2|result-2-rebuild"
+        )
+        rc=0
+        for entry in "${pairs[@]}"; do
+          IFS='|' read -r component first second <<< "$entry"
+          echo "=== Reproducibility check: $component ($first vs $second) ==="
+          if diff -r "$first" "$second"; then
+            echo "OK: $component is reproducible"
+          else
+            echo "FAIL: build not reproducible for $component (diff shown above)"
+            rc=1
+          fi
+        done
+
+        if [ "$rc" -ne 0 ]; then
+          echo "Reproducibility gate failed: at least one component produced differing outputs."
+        fi
+        exit "$rc"
 
     - name: Upload documentation
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

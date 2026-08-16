@@ -120,17 +120,63 @@ jobs:
 
     - name: Test ${{ matrix.component }} basic functionality
       run: |
-        case "${{ matrix.component }}" in
-          "attestation-agent")
-            timeout 10s ./build/${{ matrix.component }}/bin/${{ matrix.component }} || true
-            ;;
-          "rust-echo-service"|"cpp-echo-service")
-            timeout 5s ./build/${{ matrix.component }}/bin/${{ matrix.component }} || true
-            ;;
-          *)
-            ./build/${{ matrix.component }}/bin/${{ matrix.component }} --help || true
-            ;;
+        set -euo pipefail
+
+        # Disable core dumps. A crashing binary that is slow to dump core can
+        # still be dying when `timeout` fires, which would be reported as 124
+        # (the healthy code) instead of 128+signal. With core dumps off, a
+        # crash is reported immediately and honestly.
+        ulimit -c 0
+
+        component="${{ matrix.component }}"
+        bin="./build/$component/bin/$component"
+
+        test -x "$bin"
+
+        case "$component" in
+          "attestation-agent")            kind=service; limit=10 ;;
+          "rust-echo-service"|"cpp-echo-service") kind=service; limit=5 ;;
+          *)                              kind=cli ;;
         esac
+
+        if [ "$kind" = "service" ]; then
+          # These components are long-running servers. The healthy outcome is
+          # that the process is STILL ALIVE when `timeout` kills it, which GNU
+          # timeout reports as exit code 124. Any other status means the
+          # process exited on its own before the deadline -- it crashed, or it
+          # failed to start (bad port, missing library, panic) -- and that is
+          # exactly the breakage this step is supposed to catch.
+          echo "=== $component: expecting it to stay alive for ${limit}s ==="
+          if timeout "${limit}s" "$bin"; then
+            status=0
+          else
+            status=$?
+          fi
+
+          if [ "$status" -eq 124 ]; then
+            echo "OK: $component was still running after ${limit}s and was killed by timeout"
+          else
+            echo "FAIL: $component exited on its own with status $status before the ${limit}s deadline."
+            echo "      A healthy service would still have been running. Status 124 is the pass condition;"
+            echo "      128+N indicates death by signal N (139 = SIGSEGV)."
+            exit 1
+          fi
+        else
+          # These components are one-shot CLIs: --help must succeed.
+          echo "=== $component: expecting '--help' to exit 0 ==="
+          if "$bin" --help; then
+            status=0
+          else
+            status=$?
+          fi
+
+          if [ "$status" -eq 0 ]; then
+            echo "OK: $component --help exited 0"
+          else
+            echo "FAIL: $component --help exited with status $status"
+            exit 1
+          fi
+        fi
 
     - name: Upload build artifacts
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -173,10 +219,27 @@ jobs:
 
     - name: Generate test coverage
       run: |
+        set -euo pipefail
         cd ${{ matrix.project }}
-        cargo install cargo-tarpaulin || true
-        cargo tarpaulin --out Xml || true
 
+        # cargo-tarpaulin comes from the dev shell (flake.nix). It used to be
+        # `cargo install`ed here at runtime, which (a) fetched from crates.io
+        # in the middle of a Nix-pinned build and (b) has been failing outright
+        # -- `cargo-platform` now requires rustc 1.91 and the pinned toolchain
+        # is 1.86 -- leaving `cargo tarpaulin` as "no such command". Both
+        # failures were swallowed, so no coverage was ever produced and the
+        # uploaded number was fictional.
+        cargo tarpaulin --out Xml
+
+        # Producing the report is the point of this step; if the file is not
+        # there, the step has not done its job.
+        test -f cobertura.xml
+        echo "OK: coverage report generated for ${{ matrix.project }}"
+
+    # Deliberately advisory: this uploads to a third-party service, so an
+    # outage or a rate limit on codecov.io should not fail the build. The
+    # assertion that matters -- that coverage was actually measured and the
+    # report exists -- is made in the step above, where it belongs.
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@b9fd7d16f6d7d1b5d2bec1a2887e65ceed900238 # v4
       with:
@@ -212,8 +275,40 @@ jobs:
 
     - name: Make binaries executable
       run: |
-        chmod +x build/bin/* || true
-        ls -la build/bin/* || true
+        set -euo pipefail
+
+        # Every component built by the build-matrix job must have arrived via
+        # the artifact download. A missing binary used to be silent here and
+        # then surfaced later as a confusing integration-test failure.
+        expected=(
+          attestation-agent
+          cpp-echo-service
+          derivation-hasher
+          rust-client
+          rust-echo-service
+        )
+
+        missing=()
+        for name in "${expected[@]}"; do
+          if [ ! -f "build/bin/$name" ]; then
+            missing+=("build/bin/$name")
+          fi
+        done
+
+        if [ "${#missing[@]}" -ne 0 ]; then
+          echo "FAIL: expected binaries are missing from the downloaded artifacts:"
+          printf '  %s\n' "${missing[@]}"
+          echo "What was actually downloaded:"
+          if [ -d build ]; then
+            find build -maxdepth 3 -mindepth 1 | sort
+          else
+            echo "  (no 'build' directory at all)"
+          fi
+          exit 1
+        fi
+
+        chmod +x build/bin/*
+        ls -la build/bin/
 
     - name: Run integration tests
       run: just test-integration
@@ -285,41 +380,9 @@ jobs:
       run: just generate-docs
 
     - name: Test reproducible builds
-      run: |
-        set -euo pipefail
-
-        nix build .#rust-echo-service -o result-1
-        nix build .#attestation-agent -o result-2
-
-        # `--rebuild` re-executes the derivation and makes Nix compare the fresh
-        # output against the one already in the store. Without it the second
-        # `nix build` is a no-op that resolves to the *same* store path, so the
-        # comparison below would trivially succeed no matter what.
-        nix build .#rust-echo-service --rebuild -o result-1-rebuild
-        nix build .#attestation-agent --rebuild -o result-2-rebuild
-
-        # A differing pair prints the full diff (diagnostics) and makes the step
-        # exit non-zero. This gate must never report success on a real diff.
-        pairs=(
-          "rust-echo-service|result-1|result-1-rebuild"
-          "attestation-agent|result-2|result-2-rebuild"
-        )
-        rc=0
-        for entry in "${pairs[@]}"; do
-          IFS='|' read -r component first second <<< "$entry"
-          echo "=== Reproducibility check: $component ($first vs $second) ==="
-          if diff -r "$first" "$second"; then
-            echo "OK: $component is reproducible"
-          else
-            echo "FAIL: build not reproducible for $component (diff shown above)"
-            rc=1
-          fi
-        done
-
-        if [ "$rc" -ne 0 ]; then
-          echo "Reproducibility gate failed: at least one component produced differing outputs."
-        fi
-        exit "$rc"
+      # Implementation lives in scripts/check-reproducibility.sh so that this
+      # gate and the `just ci-docs-reproducibility` recipe run the same code.
+      run: ./scripts/check-reproducibility.sh
 
     - name: Upload documentation
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

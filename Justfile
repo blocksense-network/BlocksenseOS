@@ -209,7 +209,11 @@ ci-performance-tests: test-performance
 ci-attestation-tests: test-attestation-full
 
 # Run documentation and reproducibility tests for CI
+# Runs the same script as the `documentation-reproducibility` CI job, so a
+# reproducibility regression is catchable locally via `just ci-main`.
 ci-docs-reproducibility: check generate-docs
+    @echo "=== Running Reproducibility Check ==="
+    ./scripts/check-reproducibility.sh
 
 # Run vulnerability scanning (like CI does)
 ci-vulnerability-scan:

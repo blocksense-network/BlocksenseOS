@@ -62,6 +62,7 @@
             cargo-audit
             cargo-deny
             cargo-outdated
+            cargo-tarpaulin # Coverage; pinned here instead of `cargo install` at CI time
             # Additional security tools for comprehensive auditing
             semgrep # Static analysis security scanner
             bandit # Python security linter (in case we add Python scripts)
